@@ -1,0 +1,50 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Outfit:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-[#F1F5F9] text-[#1C2434] antialiased dark:bg-[#0B1120] dark:text-[#FFFFFF] font-sans;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  }
+}
+
+/* Custom modern scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #CBD5E1;
+  border-radius: 9999px;
+}
+.dark ::-webkit-scrollbar-thumb {
+  background: #1E2C52;
+}
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #2E4172;
+}
+
+/* TailAdmin Card styling matching exact dark mode screenshot */
+.tailadmin-card {
+  @apply bg-white dark:bg-[#131E3D] border border-[#E2E8F0] dark:border-[#1E2C52] rounded-2xl shadow-tailadmin-card;
+}
+
+/* Input fields matching screenshot */
+.tailadmin-input {
+  @apply bg-[#F8FAFC] dark:bg-[#0F1832] border border-[#E2E8F0] dark:border-[#1E2C52] rounded-xl text-[#1C2434] dark:text-white placeholder-[#94A3B8] dark:placeholder-[#62718E] focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition-all;
+}
+
+/* Pulse animation for active AI processing */
+@keyframes subtle-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.85; transform: scale(1.02); }
+}
+.ai-pulsing {
+  animation: subtle-pulse 2.5s infinite ease-in-out;
+}
