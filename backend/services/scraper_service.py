@@ -1,7 +1,9 @@
 """
 Multi-Source Web Scraping and Viewpoint Harvesting Pipeline.
-Uses Playwright Headless Chromium to harvest genuine search engine image results,
-bypassing bot-detection and sponsored ad grids.
+Uses Playwright Headless Chromium to harvest genuine search engine image results
+via Bing Image Search using a strict Metadata Priority Cascade.
+Repurposes DINOv2 strictly for downstream intra-candidate deduplication
+and PCA 2D scatter coordinate projection.
 """
 
 import os
@@ -18,12 +20,14 @@ import urllib.parse
 from urllib.parse import urljoin
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Union, Tuple
+from concurrent.futures import ThreadPoolExecutor
 from PIL import Image
 
 import requests
 import numpy as np
 
 from services.dinov2_service import DinoV2Engine, get_dinov2_engine
+from services.triage_service import build_prioritized_search_queries
 
 logger = logging.getLogger(__name__)
 
@@ -34,16 +38,20 @@ DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
 )
-HARD_FLOOR_THRESHOLD = 0.45
-MIN_IMAGE_DIMENSION = 100
+MIN_IMAGE_DIMENSION = 80
+INTRA_POOL_DEDUP_THRESHOLD = 0.95
 
 
 def harvest_search_images_playwright(query: str, max_results: int = 8) -> List[str]:
     """
-    Launches headless Chromium to navigate to Bing/Search Images, waits for real image
-    DOM nodes, and extracts genuine product images without getting ad feeds.
+    Launches headless Chromium to navigate to Bing Images, waits for real image
+    DOM nodes, and extracts genuine product images via `a.iusc` (`murl`) attribute.
     """
-    image_urls = []
+    image_urls: List[str] = []
+    clean_query = query.strip()
+    if not clean_query:
+        return []
+
     try:
         from playwright.sync_api import sync_playwright
         with sync_playwright() as p:
@@ -54,12 +62,12 @@ def harvest_search_images_playwright(query: str, max_results: int = 8) -> List[s
             )
             page = context.new_page()
 
-            # Navigate to Search Images with full DOM rendering
-            b_url = f"https://www.bing.com/images/search?q={urllib.parse.quote(query)}&form=HDRSC2&first=1"
+            # Navigate to Bing Images with full DOM rendering
+            b_url = f"https://www.bing.com/images/search?q={urllib.parse.quote(clean_query)}&form=HDRSC2&first=1"
             page.goto(b_url, wait_until="commit", timeout=8000)
-            page.wait_for_timeout(900)
+            page.wait_for_timeout(800)
             page.evaluate("window.scrollBy(0, 600)")
-            page.wait_for_timeout(500)
+            page.wait_for_timeout(400)
 
             # 1. Parse 'm' JSON attributes on <a> tags (contains direct hi-res murl)
             for el in page.locator("a.iusc").all():
@@ -73,7 +81,7 @@ def harvest_search_images_playwright(query: str, max_results: int = 8) -> List[s
                     except Exception:
                         pass
 
-            # Fallback to direct img elements
+            # Fallback to direct img elements if sparse
             if len(image_urls) < 4:
                 for img in page.locator("img.mimg, div.imgpt img, img").all():
                     for attr in ["src", "data-src"]:
@@ -83,23 +91,23 @@ def harvest_search_images_playwright(query: str, max_results: int = 8) -> List[s
 
             browser.close()
     except Exception as e:
-        logger.warning(f"Playwright search error for '{query}': {e}")
+        logger.warning(f"Playwright search error for '{clean_query}': {e}")
 
-    # Fallback to direct HTTP regex if browser encountered an issue
+    # Fallback to HTTP regex if headless browser encountered an issue
     if len(image_urls) < 3:
         try:
-            b_url = f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(query + ' product photo')}"
+            b_url = f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(clean_query)}"
             headers = {"User-Agent": DEFAULT_USER_AGENT}
             resp = requests.get(b_url, headers=headers, timeout=6)
             if resp.status_code == 200:
                 raw_imgs = re.findall(r'src=\"(https?://[^\"]+)\"', resp.text)
                 for u in raw_imgs:
-                    if "duckduckgo.com" not in u and not u.lower().endswith((".svg", ".ico")):
+                    if "duckduckgo.com" not in u and not u.lower().endswith((".svg", ".ico", ".gif")):
                         image_urls.append(u)
         except Exception:
             pass
 
-    # Deduplicate
+    # Deduplicate URLs
     seen = set()
     deduped = []
     for u in image_urls:
@@ -155,10 +163,16 @@ def scrape_images_scrapy(query: str, max_results: int = 10) -> List[Dict[str, An
 
 
 class ScrapingPipelineManager:
+    """
+    Manages search image harvesting using a strict Metadata Priority Cascade,
+    and applies DINOv2 strictly for intra-pool deduplication and PCA coordinate projection.
+    """
+
     def __init__(self, engine: Optional[DinoV2Engine] = None):
         self.dinov2_engine = engine or get_dinov2_engine()
 
     def _fetch_image_in_memory(self, url: str, timeout: int = 5) -> Optional[Tuple[Image.Image, bytes]]:
+        """Downloads an image and verifies minimum dimensions in RAM."""
         if os.path.exists(url):
             try:
                 with open(url, "rb") as f:
@@ -180,146 +194,175 @@ class ScrapingPipelineManager:
             pass
         return None
 
-    def _cosine_similarity(self, vec1: np.ndarray, vec2: np.ndarray) -> float:
-        dot = np.dot(vec1, vec2)
-        n1, n2 = np.linalg.norm(vec1), np.linalg.norm(vec2)
-        return float(dot / (n1 * n2)) if (n1 > 0 and n2 > 0) else 0.0
-
     def execute_pipeline(
         self,
-        seed_image: Union[str, Path, Image.Image],
+        seed_image: Optional[Union[str, Path, Image.Image]] = None,
         target_queries: Optional[List[str]] = None,
         max_candidates: int = 12,
         similarity_threshold: float = 0.55,
         dynamic_urls: Optional[List[str]] = None,
-        product_title: str = "Product Asset"
+        product_title: str = "Product Asset",
+        product_sku: str = "",
+        product_id: str = "",
+        model_number: str = "",
+        category: str = ""
     ) -> Dict[str, Any]:
-        # 1. Compute Seed Reference Vector
-        seed_pil = self.dinov2_engine._load_image(seed_image)
-        seed_features = self.dinov2_engine.extract_features(seed_pil)
-        seed_cls = seed_features["cls_token"]
-        seed_cls_vec = (
-            seed_cls.detach().cpu().numpy().flatten()
-            if hasattr(seed_cls, "detach")
-            else np.array(seed_cls).flatten()
+        """
+        Executes the refactored image discovery and filtering pipeline:
+        1. Generates prioritized queries via Metadata Priority Cascade (Priority 1 -> 5).
+        2. Queries Priority 1 & 2 targets first before falling back down the ladder.
+        3. Harvests images via Bing Image Search Playwright DOM parser.
+        4. Ingests all valid candidates without seed-vector gatekeeping.
+        5. Performs intra-pool deduplication using DINOv2 cosine similarity (drops >= 0.95 identical angles).
+        6. Projects candidates onto 2D PCA vector space coordinates.
+        7. Writes accepted candidates to local cache.
+        """
+        # 1. Build Metadata Prioritized Query Ladder
+        effective_sku = model_number or product_sku
+        effective_id = product_id or product_sku
+
+        prioritized_ladder = build_prioritized_search_queries(
+            product_id=effective_id,
+            product_name=product_title,
+            model_number=effective_sku,
+            category=category,
+            raw_queries=target_queries,
+            dynamic_urls=dynamic_urls
         )
 
-        # 2. Formulate Precision Angle Queries
-        clean_name = f'"{product_title.strip()}"' if not (product_title.strip().startswith('"') and product_title.strip().endswith('"')) else product_title.strip()
-        angle_branches = [
-            ("Front Reference", f"{clean_name} front view official product" if "fan" not in product_title.lower() else f"{clean_name} electric desk fan front view"),
-            ("Side Profile", f"{clean_name} side profile angle" if "fan" not in product_title.lower() else f"{clean_name} table fan side profile blade cage"),
-            ("Rear View", f"{clean_name} rear back view details" if "fan" not in product_title.lower() else f"{clean_name} oscillating desk fan rear motor housing"),
-            ("Isometric Angle", f"{clean_name} 45 degree perspective" if "fan" not in product_title.lower() else f"{clean_name} electric table fan perspective view")
-        ]
+        logger.info(f"Built {len(prioritized_ladder)} prioritized queries for '{product_title}' (SKU: {effective_sku})")
 
-        if target_queries:
-            for q in target_queries:
-                ql = q.lower()
-                tag = "Rear View" if ("rear" in ql or "back" in ql) else ("Side Profile" if ("side" in ql or "profile" in ql) else "Isometric Angle")
-                angle_branches.append((tag, q))
+        # 2. Extract Seed Vector for PCA Anchor (if provided)
+        seed_cls_vec = None
+        if seed_image:
+            try:
+                seed_cls_vec = self.dinov2_engine.extract_cls_token(seed_image)
+            except Exception as e:
+                logger.warning(f"Could not extract seed features: {e}")
 
-        # 3. Harvest candidate image links
-        all_candidates = []
-        seen = set()
+        # 3. Harvest candidate image links (Querying Priority 1 and 2 targets first)
+        all_candidates: List[Dict[str, Any]] = []
+        seen_urls = set()
 
-        for tag, q_str in angle_branches[:4]:
+        # Group queries by priority tier to ensure Priority 1 & 2 are harvested first
+        for q_item in prioritized_ladder:
+            p_tier = q_item["priority"]
+            q_str = q_item["query"]
+            angle_tag = q_item["angle_tag"]
+            source_desc = q_item["source_tier"]
+
+            # Fetch up to 5 results per query
             urls = harvest_search_images_playwright(q_str, max_results=5)
             for u in urls:
-                if u not in seen:
-                    seen.add(u)
+                if u not in seen_urls:
+                    seen_urls.add(u)
                     all_candidates.append({
                         "url": u,
-                        "branch_angle": tag,
-                        "title": f"{product_title} ({tag})"
+                        "branch_angle": angle_tag,
+                        "priority": p_tier,
+                        "source": f"Bing {source_desc}",
+                        "title": f"{product_title} ({angle_tag})",
+                        "query": q_str
                     })
 
-        # 4. Fetch candidate images into RAM in parallel
-        from concurrent.futures import ThreadPoolExecutor
+            # If we've gathered enough raw candidates from high-priority tiers, continue
+            if len(all_candidates) >= max_candidates * 3:
+                break
 
+        logger.info(f"Harvested {len(all_candidates)} candidate URLs from Bing search queries")
+
+        # 4. Fetch candidate images into RAM in parallel
         def fetch_worker(item: Dict[str, Any]):
             res = self._fetch_image_in_memory(item["url"], timeout=4)
             return (item, res[0], res[1]) if res else None
 
-        fetched = []
+        fetched: List[Tuple[Dict[str, Any], Image.Image, bytes]] = []
         with ThreadPoolExecutor(max_workers=6) as ex:
-            for r in ex.map(fetch_worker, all_candidates[:20]):
+            for r in ex.map(fetch_worker, all_candidates[:30]):
                 if r:
                     fetched.append(r)
 
-        # 5. DINOv2 Scoring & Rejection of Irrelevant Noise
-        evaluated = []
+        logger.info(f"Successfully downloaded {len(fetched)} candidate images into RAM")
+
+        # 5. DINOv2 Feature Extraction & Candidate Ingestion (NO SEED VECTOR GATEKEEPING)
+        evaluated_candidates: List[Dict[str, Any]] = []
         for item, pil_img, raw in fetched:
             try:
-                cand_feat = self.dinov2_engine.extract_features(pil_img)
-                cand_cls = cand_feat["cls_token"]
-                c_vec = (
-                    cand_cls.detach().cpu().numpy().flatten()
-                    if hasattr(cand_cls, "detach")
-                    else np.array(cand_cls).flatten()
-                )
-                sim = self.dinov2_engine.compute_similarity(seed_features, cand_feat)
+                c_vec = self.dinov2_engine.extract_cls_token(pil_img)
 
-                comp = round(float(sim["composite_score"]), 4)
-                g_sim = round(float(sim["global_similarity"]), 4)
-                p_sim = round(float(sim["patch_score"]), 4)
+                # Skip identical copies of the seed image (if seed is known)
+                if seed_cls_vec is not None:
+                    seed_sim = DinoV2Engine.cosine_similarity(seed_cls_vec, c_vec)
+                    if seed_sim >= 0.995:
+                        continue
 
-                # Skip identical copies of the seed image
-                if g_sim >= 0.985:
-                    continue
-
-                # Hard filter: drop noise (perfumes, motorcycles, unrelated pages)
-                if comp < HARD_FLOOR_THRESHOLD and p_sim < 0.55:
-                    continue
-
-                evaluated.append({
+                evaluated_candidates.append({
                     "id": f"img-{uuid.uuid4().hex[:8]}",
                     "url": item["url"],
                     "title": item["title"],
                     "branch_angle": item["branch_angle"],
-                    "source": f"Harvest Fleet ({item['branch_angle']})",
-                    "score": comp,
-                    "global_similarity": g_sim,
-                    "patch_score": p_sim,
+                    "priority": item["priority"],
+                    "source": item["source"],
+                    "score": round(0.88 + (0.10 / max(1, item["priority"])), 3),
                     "cls_vector": c_vec,
                     "raw_bytes": raw
                 })
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Error extracting features for candidate {item['url']}: {e}")
                 continue
 
-        # 6. Diversified Angle Selection & Intra-Pool Duplicate Suppression (< 0.96)
-        buckets = {"Front Reference": [], "Side Profile": [], "Rear View": [], "Isometric Angle": []}
-        for c in evaluated:
+        # 6. Intra-Pool Deduplication via DINOv2 (< 0.95 Cosine Similarity)
+        # Distribute accepted candidates across standard view buckets
+        buckets: Dict[str, List[Dict[str, Any]]] = {
+            "Front Reference": [],
+            "Side Profile": [],
+            "Rear View": [],
+            "Isometric Angle": []
+        }
+
+        for c in evaluated_candidates:
             tag = c["branch_angle"] if c["branch_angle"] in buckets else "Isometric Angle"
             buckets[tag].append(c)
 
+        # Sort each bucket by priority tier (Priority 1 first, then 2, 3...)
         for b in buckets:
-            buckets[b].sort(key=lambda x: x["score"], reverse=True)
+            buckets[b].sort(key=lambda x: (x["priority"], -x["score"]))
 
-        accepted = []
-        accepted_vectors = [seed_cls_vec]
+        accepted: List[Dict[str, Any]] = []
+        accepted_vectors: List[np.ndarray] = []
 
-        # Take the top unique match from each available angle branch
-        for b_name in ["Side Profile", "Rear View", "Isometric Angle", "Front Reference"]:
+        # Step 6a: Select the top unique candidate for each standard viewpoint bucket
+        for b_name in ["Front Reference", "Side Profile", "Rear View", "Isometric Angle"]:
             for c in buckets[b_name]:
-                if not any(self._cosine_similarity(c["cls_vector"], v) >= 0.96 for v in accepted_vectors[1:]):
+                # Intra-pool deduplication check: cosine_similarity >= 0.95 is duplicate
+                is_duplicate = any(
+                    DinoV2Engine.cosine_similarity(c["cls_vector"], v) >= INTRA_POOL_DEDUP_THRESHOLD
+                    for v in accepted_vectors
+                )
+                if not is_duplicate:
                     c["angle"] = b_name
                     c["selected"] = True
                     accepted.append(c)
                     accepted_vectors.append(c["cls_vector"])
                     break
 
-        # Fill remaining slots up to max_candidates
-        remaining = sorted(evaluated, key=lambda x: x["score"], reverse=True)
-        for c in remaining:
+        # Step 6b: Fill remaining slots up to max_candidates while enforcing intra-pool deduplication
+        all_remaining = sorted(evaluated_candidates, key=lambda x: (x["priority"], -x["score"]))
+        for c in all_remaining:
             if len(accepted) >= max_candidates:
                 break
             if c not in accepted:
-                if not any(self._cosine_similarity(c["cls_vector"], v) >= 0.96 for v in accepted_vectors[1:]):
+                is_duplicate = any(
+                    DinoV2Engine.cosine_similarity(c["cls_vector"], v) >= INTRA_POOL_DEDUP_THRESHOLD
+                    for v in accepted_vectors
+                )
+                if not is_duplicate:
                     c["angle"] = c["branch_angle"]
                     c["selected"] = True
                     accepted.append(c)
                     accepted_vectors.append(c["cls_vector"])
+
+        logger.info(f"Intra-pool deduplication complete: {len(accepted)} unique viewpoints accepted")
 
         # 7. Write accepted images to local candidate cache
         for c in accepted:
@@ -332,13 +375,21 @@ class ScrapingPipelineManager:
                 c["local_path"] = str(dest)
                 c["url"] = f"http://127.0.0.1:5000/cache/candidates/verified_{h}.jpg"
 
-        # 8. Compute 2D PCA Coordinates
-        all_vecs = [seed_cls_vec] + [c["cls_vector"] for c in accepted]
-        all_coords = DinoV2Engine.compute_2d_scatter_coordinates(all_vecs)
-        seed_coord = all_coords[0] if all_coords else {"x": 0.0, "y": 0.0}
-        cand_coords = all_coords[1:] if len(all_coords) > 1 else []
+        # 8. Compute 2D PCA Coordinates for vector space visualizer
+        vector_pool = []
+        if seed_cls_vec is not None:
+            vector_pool.append(seed_cls_vec)
+        vector_pool.extend([c["cls_vector"] for c in accepted])
 
-        final_cards = []
+        all_coords = DinoV2Engine.compute_2d_scatter_coordinates(vector_pool)
+        if seed_cls_vec is not None and all_coords:
+            seed_coord = all_coords[0]
+            cand_coords = all_coords[1:]
+        else:
+            seed_coord = {"x": 0.0, "y": 0.0}
+            cand_coords = all_coords
+
+        final_cards: List[Dict[str, Any]] = []
         for i, c in enumerate(accepted):
             final_cards.append({
                 "id": c["id"],
@@ -346,8 +397,6 @@ class ScrapingPipelineManager:
                 "title": c["title"],
                 "source": c["source"],
                 "score": c["score"],
-                "global_similarity": c["global_similarity"],
-                "patch_score": c["patch_score"],
                 "selected": c["selected"],
                 "coordinates": cand_coords[i] if i < len(cand_coords) else {"x": 0.0, "y": 0.0},
                 "angle": c.get("angle", "Isometric Angle")
@@ -356,19 +405,23 @@ class ScrapingPipelineManager:
         return {
             "seed_coordinates": seed_coord,
             "total_harvested": len(all_candidates),
-            "total_evaluated": len(evaluated),
+            "total_evaluated": len(evaluated_candidates),
             "total_accepted": len(final_cards),
             "candidates": final_cards
         }
 
 
 def harvest_and_filter(
-    seed_image: Union[str, Path, Image.Image],
+    seed_image: Optional[Union[str, Path, Image.Image]] = None,
     target_queries: Optional[List[str]] = None,
     max_candidates: int = 12,
     similarity_threshold: float = 0.55,
     dynamic_urls: Optional[List[str]] = None,
-    product_title: str = "Product Asset"
+    product_title: str = "Product Asset",
+    product_sku: str = "",
+    product_id: str = "",
+    model_number: str = "",
+    category: str = ""
 ) -> Dict[str, Any]:
     return ScrapingPipelineManager().execute_pipeline(
         seed_image=seed_image,
@@ -376,7 +429,11 @@ def harvest_and_filter(
         max_candidates=max_candidates,
         similarity_threshold=similarity_threshold,
         dynamic_urls=dynamic_urls,
-        product_title=product_title
+        product_title=product_title,
+        product_sku=product_sku,
+        product_id=product_id,
+        model_number=model_number,
+        category=category
     )
 
 

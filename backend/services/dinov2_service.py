@@ -1,7 +1,7 @@
 """
-DINOv2 Feature Extraction, Cross-View Metric Comparison, and PCA Projection Engine.
-Provides patch-level structural similarity, CLS global semantic similarity,
-and 2D t-SNE/PCA coordinates projection relative to seed references.
+DINOv2 Feature Extraction, Cross-View Intra-Pool Deduplication, and PCA Projection Engine.
+Provides CLS semantic vector extraction, intra-pool duplicate suppression,
+and 2D PCA coordinate projection for multi-view product reconstruction.
 """
 
 import io
@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 class DinoV2Engine:
     """
     High-performance feature extraction and metric comparison engine powered by Meta's DINOv2.
+    Repurposed for downstream intra-candidate deduplication (filtering duplicate camera angles)
+    and 2D scatter coordinates projection.
     """
 
     def __init__(
@@ -109,6 +111,20 @@ class DinoV2Engine:
         tensor = tensor.unsqueeze(0).to(self.device)  # Shape: (1, 3, 224, 224)
         return tensor
 
+    def extract_cls_token(
+        self,
+        image_input: Union[str, bytes, Image.Image, np.ndarray, torch.Tensor]
+    ) -> np.ndarray:
+        """
+        Extracts an L2-normalized 1D CLS token vector (384-dim) as a float32 numpy array.
+        """
+        tensor = self.preprocess(image_input)
+        with torch.no_grad():
+            features_dict = self.model.forward_features(tensor)
+            cls_token = features_dict["x_norm_clstoken"][0]
+            cls_token = F.normalize(cls_token, p=2, dim=-1)
+        return cls_token.detach().cpu().numpy().flatten().astype(np.float32)
+
     def extract_features(
         self,
         image_input: Union[str, bytes, Image.Image, np.ndarray, torch.Tensor],
@@ -116,11 +132,6 @@ class DinoV2Engine:
     ) -> Dict[str, Any]:
         """
         Extracts both global normalized [CLS] token and dense spatial patch tokens.
-
-        Returns:
-            Dict containing:
-                - 'cls_token': L2-normalized 1D vector (384-dim)
-                - 'patch_tokens': L2-normalized 2D matrix (256, 384) (16x16 grid for 224x224 input)
         """
         tensor = self.preprocess(image_input)
 
@@ -129,12 +140,10 @@ class DinoV2Engine:
             
             # x_norm_clstoken shape: (1, 384)
             cls_token = features_dict["x_norm_clstoken"][0]
-            # Ensure unit norm
             cls_token = F.normalize(cls_token, p=2, dim=-1)
 
             # x_norm_patchtokens shape: (1, 256, 384)
             patch_tokens = features_dict["x_norm_patchtokens"][0]
-            # Ensure unit norm per patch
             patch_tokens = F.normalize(patch_tokens, p=2, dim=-1)
 
         if return_numpy:
@@ -148,6 +157,31 @@ class DinoV2Engine:
             "patch_tokens": patch_tokens
         }
 
+    @staticmethod
+    def cosine_similarity(
+        vec1: Union[np.ndarray, torch.Tensor, List[float]],
+        vec2: Union[np.ndarray, torch.Tensor, List[float]]
+    ) -> float:
+        """
+        Computes cosine similarity between two 1D vectors.
+        """
+        if isinstance(vec1, torch.Tensor):
+            vec1 = vec1.detach().cpu().numpy().flatten()
+        elif isinstance(vec1, list):
+            vec1 = np.array(vec1, dtype=np.float32)
+
+        if isinstance(vec2, torch.Tensor):
+            vec2 = vec2.detach().cpu().numpy().flatten()
+        elif isinstance(vec2, list):
+            vec2 = np.array(vec2, dtype=np.float32)
+
+        dot = np.dot(vec1, vec2)
+        n1 = np.linalg.norm(vec1)
+        n2 = np.linalg.norm(vec2)
+        if n1 > 0 and n2 > 0:
+            return float(dot / (n1 * n2))
+        return 0.0
+
     def compute_similarity(
         self,
         seed_features: Union[Dict[str, Any], Tuple[Any, Any]],
@@ -155,30 +189,20 @@ class DinoV2Engine:
         top_k_percent: float = 0.20
     ) -> Dict[str, float]:
         """
-        Calculates composite similarity between seed and candidate features:
-        1. Global Cosine Similarity via dot product on normalized [CLS] tokens.
-        2. Patch-level structural similarity using top-k (20%) max cosine patch matches
-           to capture shared chassis materials, contours, and sub-components across viewpoints.
-        3. composite_score = (0.4 * global_sim) + (0.6 * patch_score).
-
-        Returns:
-            Dict with 'composite_score', 'global_similarity', 'patch_score'.
+        Calculates composite similarity between seed and candidate features.
         """
-        # Unpack seed features
         if isinstance(seed_features, dict):
             seed_cls = seed_features["cls_token"]
             seed_patches = seed_features["patch_tokens"]
         else:
             seed_cls, seed_patches = seed_features
 
-        # Unpack candidate features
         if isinstance(candidate_features, dict):
             cand_cls = candidate_features["cls_token"]
             cand_patches = candidate_features["patch_tokens"]
         else:
             cand_cls, cand_patches = candidate_features
 
-        # Convert to torch tensor on device if numpy array
         if isinstance(seed_cls, np.ndarray):
             seed_cls = torch.from_numpy(seed_cls)
         if isinstance(cand_cls, np.ndarray):
@@ -193,34 +217,26 @@ class DinoV2Engine:
         seed_patches = seed_patches.to(self.device)
         cand_patches = cand_patches.to(self.device)
 
-        # 1. Global Cosine Similarity
         seed_cls_norm = F.normalize(seed_cls, p=2, dim=-1)
         cand_cls_norm = F.normalize(cand_cls, p=2, dim=-1)
         global_sim = float(torch.dot(seed_cls_norm, cand_cls_norm).clamp(-1.0, 1.0).item())
 
-        # 2. Dense Patch-Level Structural Similarity
-        seed_patches_norm = F.normalize(seed_patches, p=2, dim=-1)  # (N_seed, 384)
-        cand_patches_norm = F.normalize(cand_patches, p=2, dim=-1)  # (N_cand, 384)
+        seed_patches_norm = F.normalize(seed_patches, p=2, dim=-1)
+        cand_patches_norm = F.normalize(cand_patches, p=2, dim=-1)
 
-        # Cross-patch cosine similarity matrix: (N_seed, N_cand)
         sim_matrix = torch.matmul(seed_patches_norm, cand_patches_norm.transpose(0, 1))
 
-        # Best candidate patch match for each seed patch
-        max_per_seed, _ = torch.max(sim_matrix, dim=1)  # (N_seed,)
+        max_per_seed, _ = torch.max(sim_matrix, dim=1)
         k_seed = max(1, int(math.ceil(len(max_per_seed) * top_k_percent)))
         topk_seed, _ = torch.topk(max_per_seed, k=k_seed)
         seed_patch_mean = topk_seed.mean().item()
 
-        # Best seed patch match for each candidate patch (symmetric check)
-        max_per_cand, _ = torch.max(sim_matrix, dim=0)  # (N_cand,)
+        max_per_cand, _ = torch.max(sim_matrix, dim=0)
         k_cand = max(1, int(math.ceil(len(max_per_cand) * top_k_percent)))
         topk_cand, _ = torch.topk(max_per_cand, k=k_cand)
         cand_patch_mean = topk_cand.mean().item()
 
-        # Bidirectional top-k structural patch score
         patch_score = float(0.5 * (seed_patch_mean + cand_patch_mean))
-
-        # 3. Composite Score: 40% global semantic + 60% dense structural patch
         composite_score = float((0.4 * global_sim) + (0.6 * patch_score))
 
         return {
@@ -238,14 +254,10 @@ class DinoV2Engine:
         using Principal Component Analysis (PCA).
         The seed vector at index 0 is anchored to (0.0, 0.0), and all other candidate
         points are positioned relative to the seed.
-
-        Returns:
-            List of dicts: [{'x': float, 'y': float}, ...]
         """
         if not vector_list:
             return []
 
-        # Convert all vectors to 2D numpy float32 matrix
         np_vectors = []
         for v in vector_list:
             if isinstance(v, torch.Tensor):
@@ -257,14 +269,13 @@ class DinoV2Engine:
             else:
                 raise ValueError(f"Unsupported vector format in vector_list: {type(v)}")
 
-        matrix = np.vstack(np_vectors)  # Shape: (N, D)
+        matrix = np.vstack(np_vectors)
         n_samples, n_features = matrix.shape
 
         if n_samples == 1:
             return [{"x": 0.0, "y": 0.0}]
 
         if n_samples == 2:
-            # For 2 points, project along line connecting them
             diff = matrix[1] - matrix[0]
             dist = float(np.linalg.norm(diff))
             return [
@@ -274,7 +285,7 @@ class DinoV2Engine:
 
         # Use PCA for n_samples >= 3
         pca = PCA(n_components=2, random_state=42)
-        projected = pca.fit_transform(matrix)  # Shape: (N, 2)
+        projected = pca.fit_transform(matrix)
 
         # Shift coordinate system so the seed at index 0 is exactly (0.0, 0.0)
         seed_coord = projected[0]

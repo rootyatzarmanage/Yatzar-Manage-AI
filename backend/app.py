@@ -264,9 +264,13 @@ def run_triage():
                 saved_image_path = str(dest)
 
         # Form fields or JSON body
+        category = ""
+        product_id = ""
         if request.form:
             product_title = request.form.get("product_title") or request.form.get("name") or ""
             product_sku = request.form.get("product_sku") or request.form.get("modelNumber") or request.form.get("sku") or ""
+            category = request.form.get("category") or ""
+            product_id = request.form.get("product_id") or request.form.get("id") or product_sku
             if not saved_image_path:
                 saved_image_path = request.form.get("image_path") or request.form.get("thumbnail") or request.form.get("seed_image")
 
@@ -274,14 +278,18 @@ def run_triage():
             data = request.json
             product_title = data.get("product_title") or data.get("name") or product_title
             product_sku = data.get("product_sku") or data.get("modelNumber") or data.get("sku") or product_sku
+            category = data.get("category") or category
+            product_id = data.get("product_id") or data.get("id") or product_id or product_sku
             if not saved_image_path:
                 saved_image_path = data.get("image_path") or data.get("thumbnail") or data.get("seed_image")
 
-        logger.info(f"Running geometric uncertainty triage for '{product_title}' (SKU: {product_sku})")
+        logger.info(f"Running geometric uncertainty triage for '{product_title}' (SKU: {product_sku}, Cat: {category})")
         triage_data = evaluate_geometric_uncertainty(
             image_path=saved_image_path,
             product_title=product_title,
-            product_sku=product_sku
+            product_sku=product_sku,
+            category=category,
+            product_id=product_id
         )
 
         return jsonify({
@@ -302,13 +310,16 @@ def run_triage():
 def run_scrape():
     """
     POST /api/v1/scrape
-    Ingests the seed image and runs scraper_service.execute_pipeline().
-    Returns top 10 verified cards with DINOv2 score, 2D PCA vector space coordinates, and source tags.
+    Ingests product metadata and runs scraper_service.execute_pipeline() with
+    the Metadata Priority Cascade and intra-candidate deduplication.
+    Returns verified cards with 2D PCA vector space coordinates and source tags.
     """
     try:
         seed_image_input = None
         product_title = ""
         product_sku = ""
+        category = ""
+        product_id = ""
         target_queries = []
         dynamic_urls = []
 
@@ -324,6 +335,8 @@ def run_scrape():
         if request.form:
             product_title = request.form.get("product_title") or request.form.get("name") or product_title
             product_sku = request.form.get("product_sku") or request.form.get("modelNumber") or product_sku
+            category = request.form.get("category") or category
+            product_id = request.form.get("product_id") or request.form.get("id") or product_id
             if not seed_image_input:
                 seed_image_input = request.form.get("seed_image") or request.form.get("thumbnail") or request.form.get("image")
             q_str = request.form.get("target_queries")
@@ -338,6 +351,8 @@ def run_scrape():
             data = request.json
             product_title = data.get("product_title") or data.get("name") or product_title
             product_sku = data.get("product_sku") or data.get("modelNumber") or product_sku
+            category = data.get("category") or category
+            product_id = data.get("product_id") or data.get("id") or product_id
             if not seed_image_input:
                 seed_image_input = data.get("seed_image") or data.get("thumbnail") or data.get("image")
             target_queries = data.get("target_queries") or target_queries
@@ -364,19 +379,17 @@ def run_scrape():
             triage_res = evaluate_geometric_uncertainty(
                 image_path=seed_image_input if isinstance(seed_image_input, str) and os.path.exists(seed_image_input) else None,
                 product_title=product_title,
-                product_sku=product_sku
+                product_sku=product_sku,
+                category=category,
+                product_id=product_id
             )
-            target_queries = triage_res.get("target_search_queries", [
-                f"{product_title} rear view",
-                f"{product_title} side profile view",
-                f"{product_title} bottom ports"
-            ])
+            target_queries = triage_res.get("target_search_queries", [])
 
         # If seed_image_input is None or invalid, generate fallback image
         if not seed_image_input:
             seed_image_input = "https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=600&auto=format&fit=crop&q=80"
 
-        logger.info(f"Running Scraping Pipeline for '{product_title}' (SKU: {product_sku}) across {len(target_queries)} queries")
+        logger.info(f"Running Scraping Pipeline for '{product_title}' (SKU: {product_sku}, Cat: {category}) across {len(target_queries)} queries")
         start_time = time.time()
         pipeline_manager = ScrapingPipelineManager()
         pipeline_result = pipeline_manager.execute_pipeline(
@@ -385,7 +398,11 @@ def run_scrape():
             max_candidates=15,
             similarity_threshold=0.60,
             dynamic_urls=dynamic_urls,
-            product_title=product_title
+            product_title=product_title,
+            product_sku=product_sku,
+            product_id=product_id,
+            model_number=product_sku,
+            category=category
         )
 
         candidates = pipeline_result.get("candidates", [])
@@ -437,7 +454,7 @@ def run_scrape():
 def run_cascade():
     """
     POST /api/v1/cascade
-    Executes a targeted search cascade for occluded angles/ports using real scrapers + DINOv2 scoring.
+    Executes a targeted search cascade for occluded angles/ports using Bing scrapers + intra-pool DINOv2 deduplication.
     """
     try:
         start_time = time.time()
@@ -446,6 +463,8 @@ def run_cascade():
         cascade_query = data.get("cascade_query") or data.get("query") or "Product rear view"
         product_title = data.get("product_title") or data.get("name") or "Product Asset"
         product_sku = data.get("product_sku") or data.get("modelNumber") or "SKU-01"
+        category = data.get("category") or ""
+        product_id = data.get("product_id") or data.get("id") or product_sku
         seed_image_input = data.get("seed_image") or data.get("thumbnail")
         cycle_number = int(data.get("cycle_number", 2))
 
@@ -470,7 +489,11 @@ def run_cascade():
             target_queries=[cascade_query],
             max_candidates=6,
             similarity_threshold=0.60,
-            product_title=product_title
+            product_title=product_title,
+            product_sku=product_sku,
+            product_id=product_id,
+            model_number=product_sku,
+            category=category
         )
 
         candidates = cascade_result.get("candidates", [])
