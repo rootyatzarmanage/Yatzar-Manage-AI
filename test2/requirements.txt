@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+python-multipart
+httpx
+beautifulsoup4
+pillow
+imagehash
+numpy
+torch
+transformers
+ddgs
+anthropic
