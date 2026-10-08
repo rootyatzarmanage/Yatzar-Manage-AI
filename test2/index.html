@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Product Image Finder</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #3b82f6;
+            --primary-hover: #2563eb;
+            --primary-light: #eff6ff;
+            --bg-color: #f8fafc;
+            --card-bg: #ffffff;
+            --text-main: #0f172a;
+            --text-muted: #64748b;
+            --border-color: #e2e8f0;
+            --border-hover: #94a3b8;
+            --radius-lg: 12px;
+            --radius-md: 8px;
+            --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.05);
+            --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.08), 0 2px 4px -2px rgba(0, 0, 0, 0.06);
+            --shadow-hover: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.08);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            max-width: 1060px;
+            margin: 32px auto;
+            padding: 0 20px 48px;
+            line-height: 1.5;
+        }
+
+        .header {
+            margin-bottom: 24px;
+        }
+
+        .header h1 {
+            font-size: 26px;
+            font-weight: 700;
+            color: #1e293b;
+            letter-spacing: -0.02em;
+        }
+
+        .header p {
+            color: var(--text-muted);
+            font-size: 14px;
+            margin-top: 4px;
+        }
+
+        .main-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg);
+            padding: 24px;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .row {
+            display: flex;
+            gap: 28px;
+            flex-wrap: wrap;
+        }
+
+        .col {
+            flex: 1;
+            min-width: 300px;
+        }
+
+        /* Tabs */
+        .tabs {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 14px;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 8px;
+        }
+
+        .tab-btn {
+            background: transparent;
+            border: none;
+            padding: 6px 14px;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-muted);
+            cursor: pointer;
+            border-radius: 6px;
+            transition: all 0.2s ease;
+        }
+
+        .tab-btn.active {
+            background: var(--primary-light);
+            color: var(--primary);
+        }
+
+        /* Upload Dropzone */
+        .dropzone {
+            border: 2px dashed var(--border-color);
+            border-radius: var(--radius-md);
+            padding: 24px 16px;
+            text-align: center;
+            background: #fbfcfe;
+            cursor: pointer;
+            transition: all 0.2s ease-in-out;
+            position: relative;
+            min-height: 220px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .dropzone:hover {
+            border-color: var(--border-hover);
+            background: #f8faff;
+        }
+
+        .dropzone.dragover {
+            border-color: var(--primary);
+            background: var(--primary-light);
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+        }
+
+        .dropzone input[type=file] {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            opacity: 0;
+            cursor: pointer;
+        }
+
+        .upload-icon {
+            width: 44px;
+            height: 44px;
+            color: var(--primary);
+            margin: 0 auto 10px;
+            background: var(--primary-light);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .upload-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #334155;
+            margin-bottom: 4px;
+        }
+
+        .upload-subtitle {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        .preview-container {
+            display: none;
+            position: relative;
+            width: 100%;
+            text-align: center;
+        }
+
+        .preview-container.active {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .preview-img {
+            max-width: 100%;
+            max-height: 180px;
+            object-fit: contain;
+            border-radius: 6px;
+            border: 1px solid var(--border-color);
+            box-shadow: var(--shadow-sm);
+            background: #fff;
+        }
+
+        .file-info {
+            margin-top: 10px;
+            font-size: 12px;
+            color: var(--text-muted);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-remove {
+            background: #fee2e2;
+            color: #ef4444;
+            border: none;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: 0.15s ease;
+        }
+
+        .btn-remove:hover {
+            background: #fecaca;
+        }
+
+        /* Form Inputs */
+        .form-group {
+            margin-bottom: 12px;
+        }
+
+        label {
+            display: block;
+            font-size: 13px;
+            font-weight: 500;
+            color: #475569;
+            margin-bottom: 5px;
+        }
+
+        input[type=text],
+        input[type=number] {
+            width: 100%;
+            padding: 9px 12px;
+            font-size: 14px;
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-md);
+            outline: none;
+            background: #ffffff;
+            transition: border-color 0.2s, box-shadow 0.2s;
+            font-family: inherit;
+        }
+
+        input[type=text]:focus,
+        input[type=number]:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+        }
+
+        .btn-submit {
+            width: 100%;
+            padding: 12px 20px;
+            border: none;
+            border-radius: var(--radius-md);
+            background: var(--primary);
+            color: #ffffff;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            box-shadow: 0 2px 4px rgba(59, 130, 246, 0.2);
+            margin-top: 10px;
+        }
+
+        .btn-submit:hover:not(:disabled) {
+            background: var(--primary-hover);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 8px rgba(59, 130, 246, 0.3);
+        }
+
+        .btn-submit:disabled {
+            background: #cbd5e1;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        /* Results & Stats */
+        #stats {
+            margin-top: 24px;
+            padding: 14px 18px;
+            background: #f1f5f9;
+            border-radius: var(--radius-md);
+            font-size: 13px;
+            color: #334155;
+            line-height: 1.6;
+            display: none;
+        }
+
+        #stats.active {
+            display: block;
+        }
+
+        #grid {
+            margin-top: 20px;
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+            gap: 16px;
+        }
+
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-md);
+            overflow: hidden;
+            font-size: 12px;
+            box-shadow: var(--shadow-sm);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .card:hover {
+            transform: translateY(-3px);
+            box-shadow: var(--shadow-hover);
+            border-color: var(--border-hover);
+        }
+
+        .card a {
+            display: block;
+            text-decoration: none;
+        }
+
+        .card img {
+            width: 100%;
+            height: 180px;
+            object-fit: contain;
+            background: #ffffff;
+            padding: 8px;
+            transition: transform 0.2s ease;
+        }
+
+        .card:hover img {
+            transform: scale(1.03);
+        }
+
+        .card-details {
+            padding: 10px 12px;
+            background: #fafafa;
+            border-top: 1px solid #f1f5f9;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 4px;
+        }
+
+        .badge {
+            background: #e2e8f0;
+            color: #334155;
+            padding: 3px 6px;
+            border-radius: 4px;
+            font-weight: 600;
+            font-size: 11px;
+        }
+
+        .badge.anchor {
+            background: #dcfce7;
+            color: #166534;
+        }
+
+        .badge.expanded {
+            background: #e0e7ff;
+            color: #3730a3;
+        }
+
+        .err {
+            color: #dc2626;
+            background: #fef2f2;
+            padding: 12px;
+            border-radius: 6px;
+            border: 1px solid #fee2e2;
+        }
+
+        .url-box {
+            display: none;
+        }
+
+        .url-box.active {
+            display: block;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="header">
+        <h1>Product Image Finder</h1>
+        <p>Find multi-angle images for any product using iterative anchor expansion and visual verification</p>
+    </div>
+
+    <div class="main-card">
+        <div class="row">
+            <div class="col">
+                <div class="tabs">
+                    <button class="tab-btn active" id="tab-file" type="button">File Upload</button>
+                    <button class="tab-btn" id="tab-url" type="button">Image URL</button>
+                </div>
+
+                <!-- File Upload Tab -->
+                <div id="panel-file">
+                    <div class="dropzone" id="dropzone">
+                        <input type="file" id="img" accept="image/*">
+                        <div id="dropzone-prompt">
+                            <div class="upload-icon">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                    <polyline points="17 8 12 3 7 8"></polyline>
+                                    <line x1="12" y1="3" x2="12" y2="15"></line>
+                                </svg>
+                            </div>
+                            <div class="upload-title">Click to upload or drag & drop</div>
+                            <div class="upload-subtitle">PNG, JPG, WEBP (or paste with Ctrl+V)</div>
+                        </div>
+
+                        <div class="preview-container" id="file-preview-wrap">
+                            <img id="prev" class="preview-img" alt="Uploaded Preview">
+                            <div class="file-info">
+                                <span id="file-name"></span>
+                                <button type="button" class="btn-remove" id="btn-remove-file">Remove</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- URL Tab -->
+                <div id="panel-url" class="url-box">
+                    <div class="form-group">
+                        <label for="img-url">Direct Image URL</label>
+                        <input type="text" id="img-url" placeholder="https://example.com/product.jpg">
+                    </div>
+                    <div class="preview-container" id="url-preview-wrap" style="margin-top: 10px;">
+                        <img id="url-prev" class="preview-img" alt="URL Preview">
+                        <div class="file-info">
+                            <span>Image loaded</span>
+                            <button type="button" class="btn-remove" id="btn-remove-url">Remove</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col">
+                <div class="form-group">
+                    <label for="prompt">Prompt (optional)</label>
+                    <input type="text" id="prompt" placeholder="e.g. red running shoe, side view">
+                </div>
+                <div class="form-group">
+                    <label for="pid">Product ID / Name (optional)</label>
+                    <input type="text" id="pid" placeholder="e.g. Nike Air Max 90">
+                </div>
+                <div class="form-group">
+                    <label for="link">Product Link (optional)</label>
+                    <input type="text" id="link" placeholder="https://store.com/item...">
+                </div>
+                <div class="form-group">
+                    <label for="img-count">Target Image Count</label>
+                    <input type="number" id="img-count" value="15" min="1" max="30">
+                </div>
+                <button class="btn-submit" id="go" disabled>Find images</button>
+            </div>
+        </div>
+
+        <div id="stats"></div>
+        <div id="grid"></div>
+    </div>
+
+    <script>
+        const $ = id => document.getElementById(id);
+
+        let selectedFile = null;
+        let selectedUrl = "";
+        let activeTab = "file";
+
+        // Tab Switching
+        $("tab-file").onclick = () => switchTab("file");
+        $("tab-url").onclick = () => switchTab("url");
+
+        function switchTab(tab) {
+            activeTab = tab;
+            if (tab === "file") {
+                $("tab-file").classList.add("active");
+                $("tab-url").classList.remove("active");
+                $("panel-file").style.display = "block";
+                $("panel-url").classList.remove("active");
+            } else {
+                $("tab-url").classList.add("active");
+                $("tab-file").classList.remove("active");
+                $("panel-file").style.display = "none";
+                $("panel-url").classList.add("active");
+            }
+            updateSubmitButton();
+        }
+
+        function updateSubmitButton() {
+            const hasImage = activeTab === "file" ? !!selectedFile : !!selectedUrl;
+            $("go").disabled = !hasImage;
+        }
+
+        // File Handler
+        function handleFile(f) {
+            if (!f || !f.type.startsWith("image/")) return;
+            selectedFile = f;
+            $("prev").src = URL.createObjectURL(f);
+            $("file-name").textContent = `${f.name} (${(f.size / 1024).toFixed(1)} KB)`;
+            $("dropzone-prompt").style.display = "none";
+            $("file-preview-wrap").classList.add("active");
+            updateSubmitButton();
+        }
+
+        function clearFile() {
+            selectedFile = null;
+            $("img").value = "";
+            $("prev").src = "";
+            $("file-preview-wrap").classList.remove("active");
+            $("dropzone-prompt").style.display = "block";
+            updateSubmitButton();
+        }
+
+        $("img").onchange = e => {
+            if (e.target.files && e.target.files[0]) {
+                handleFile(e.target.files[0]);
+            }
+        };
+
+        $("btn-remove-file").onclick = e => {
+            e.stopPropagation();
+            clearFile();
+        };
+
+        // Drag & Drop
+        const dropzone = $("dropzone");
+        ['dragenter', 'dragover'].forEach(eventName => {
+            dropzone.addEventListener(eventName, e => {
+                e.preventDefault();
+                e.stopPropagation();
+                dropzone.classList.add('dragover');
+            }, false);
+        });
+
+        ['dragleave', 'drop'].forEach(eventName => {
+            dropzone.addEventListener(eventName, e => {
+                e.preventDefault();
+                e.stopPropagation();
+                dropzone.classList.remove('dragover');
+            }, false);
+        });
+
+        dropzone.addEventListener('drop', e => {
+            const dt = e.dataTransfer;
+            const files = dt.files;
+            if (files && files.length > 0) {
+                handleFile(files[0]);
+            }
+        }, false);
+
+        // Clipboard Paste Support
+        window.addEventListener('paste', e => {
+            const items = (e.clipboardData || e.originalEvent.clipboardData).items;
+            for (let item of items) {
+                if (item.kind === 'file' && item.type.startsWith('image/')) {
+                    const blob = item.getAsFile();
+                    switchTab("file");
+                    handleFile(blob);
+                    break;
+                }
+            }
+        });
+
+        // Image URL Input
+        $("img-url").oninput = e => {
+            const val = e.target.value.trim();
+            selectedUrl = val;
+            if (val) {
+                $("url-prev").src = val;
+                $("url-preview-wrap").classList.add("active");
+            } else {
+                $("url-preview-wrap").classList.remove("active");
+            }
+            updateSubmitButton();
+        };
+
+        $("url-prev").onerror = () => {
+            if (selectedUrl) {
+                $("url-preview-wrap").classList.remove("active");
+            }
+        };
+
+        $("btn-remove-url").onclick = () => {
+            $("img-url").value = "";
+            selectedUrl = "";
+            $("url-prev").src = "";
+            $("url-preview-wrap").classList.remove("active");
+            updateSubmitButton();
+        };
+
+        // Submit Search
+        $("go").onclick = async () => {
+            const fd = new FormData();
+            if (activeTab === "file" && selectedFile) {
+                fd.append("image", selectedFile);
+            } else if (activeTab === "url" && selectedUrl) {
+                fd.append("image_url", selectedUrl);
+            } else {
+                return;
+            }
+
+            fd.append("prompt", $("prompt").value);
+            fd.append("product_id", $("pid").value);
+            fd.append("link", $("link").value);
+            fd.append("n", $("img-count").value || 15);
+
+            $("go").disabled = true;
+            $("go").textContent = "Searching & Verifying...";
+            $("grid").innerHTML = "";
+            $("stats").className = "";
+            $("stats").textContent = "";
+
+            try {
+                const r = await fetch("/search", { method: "POST", body: fd });
+                const d = await r.json();
+                if (!r.ok) throw new Error(d.detail || "Request failed");
+
+                $("stats").className = "active";
+                const roundsText = d.rounds > 1 ? ` (${d.rounds} search rounds)` : "";
+                $("stats").innerHTML = `Query: <b>${d.query || '(none)'}</b>${roundsText}<br>`
+                    + `Downloaded & processed <b>${d.downloaded}</b> images → `
+                    + `<b>${d.verified_total}</b> passed verification → <b>${d.results.length} selected diverse shots</b> in ${d.total}s `
+                    + `<br><small style="color:#64748b">Timings: ${Object.entries(d.timings).map(([k, v]) => `${k}: ${v}s`).join(", ")}</small>`;
+
+                if (d.results.length === 0) {
+                    $("grid").innerHTML = `<div style="grid-column: 1/-1; text-align: center; color: #64748b; padding: 24px;">No matching images passed verification. Try adding a prompt or product title hint.</div>`;
+                } else {
+                    $("grid").innerHTML = d.results.map(x => `
+                        <div class="card">
+                            <a href="${x.page || x.url}" target="_blank" rel="noopener noreferrer" title="Click to view source">
+                                <img src="${x.url}" referrerpolicy="no-referrer" alt="Product match" loading="lazy">
+                            </a>
+                            <div class="card-details">
+                                <span class="badge ${x.tier === 'high' ? 'anchor' : 'expanded'}">${x.tier === 'high' ? 'Anchor' : 'Angle'} ${(x.score * 100).toFixed(0)}%</span>
+                                <span class="badge">Col ${(x.color * 100).toFixed(0)}%</span>
+                            </div>
+                        </div>`).join("");
+                }
+            } catch (e) {
+                $("stats").className = "active";
+                $("stats").innerHTML = `<div class="err">${e.message}</div>`;
+            }
+
+            $("go").disabled = false;
+            $("go").textContent = "Find images";
+            updateSubmitButton();
+        };
+    </script>
+</body>
+
+</html>
