@@ -8,6 +8,7 @@ import ScrapeStage from './components/stages/ScrapeStage';
 import ImageApprovalStage from './components/stages/ImageApprovalStage';
 import Generate3DStage from './components/stages/Generate3DStage';
 import Approval3DStage from './components/stages/Approval3DStage';
+import ReferenceSheetStage from './components/stages/ReferenceSheetStage';
 
 function MainContent() {
   const { currentStage } = useProducts();
@@ -24,10 +25,13 @@ function MainContent() {
         return <Generate3DStage />;
       case 4:
         return <Approval3DStage />;
+      case 5:
+        return <ReferenceSheetStage />;
       default:
         return <InputStage />;
     }
   };
+
 
   return (
     <div className="flex h-screen overflow-hidden bg-[#F1F5F9] dark:bg-[#0B1120] text-[#1C2434] dark:text-white">

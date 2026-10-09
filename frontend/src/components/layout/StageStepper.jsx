@@ -7,16 +7,19 @@ import {
   Box, 
   Eye, 
   ChevronRight,
-  Sparkles
+  Sparkles,
+  Layers
 } from 'lucide-react';
 
 const STAGES = [
-  { id: 0, label: 'Input', icon: FileText, desc: 'Metadata & Seed Image' },
-  { id: 1, label: 'Scrape', icon: Search, desc: 'Dynamic Angle Harvest' },
-  { id: 2, label: 'Image Approval', icon: CheckCircle, desc: 'DINOv2 Vector Anchor' },
-  { id: 3, label: '3D Generate', icon: Box, desc: 'Procedural CSG Engine' },
-  { id: 4, label: '3D Approval', icon: Eye, desc: 'Two-Tier QA Audit' },
+  { id: 0, label: 'Input', icon: FileText, desc: 'Identity & Reference' },
+  { id: 1, label: 'Research', icon: Search, desc: 'Web Reference Discovery' },
+  { id: 2, label: 'Image Approval', icon: CheckCircle, desc: 'Best Reference Verified' },
+  { id: 3, label: '3D Generate', icon: Box, desc: 'TripoSR 3D Synthesis' },
+  { id: 4, label: '3D Approval', icon: Eye, desc: 'Automated Mesh QA' },
+  { id: 5, label: 'Reference Sheet', icon: Layers, desc: 'Multi-View Spec Sheet' },
 ];
+
 
 export default function StageStepper() {
   const { currentStage, setCurrentStage, activeProduct } = useProducts();

@@ -133,18 +133,61 @@ export async function getProducts() {
 }
 
 /**
- * Generates Procedural CAD CSG parameters.
+ * Executes Autonomous 3D Reconstruction using TripoSR neural backend engine (with fallback support).
+ * @param {Object} data - { reference_image, product_title, product_sku, product_id, engine }
  */
-export async function generateCSG(product) {
+export async function reconstruct3D(data) {
   try {
-    const res = await fetch(`${API_BASE}/api/csg/generate`, {
+    const response = await fetch(`${API_BASE}/api/v1/reconstruct`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(product),
+      body: JSON.stringify({
+        reference_image: data.reference_image || data.selected_reference || data.image || data.thumbnail,
+        product_title: data.product_title || data.name || '',
+        product_sku: data.product_sku || data.modelNumber || '',
+        product_id: data.product_id || data.id || '',
+        engine: data.engine || data.reconstruction_engine || 'TripoSR',
+      }),
     });
-    return await res.json();
-  } catch (err) {
-    console.error('CSG generation error:', err);
-    throw err;
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.error || `Reconstruction failed: ${response.statusText}`);
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('Reconstruction API error:', error);
+    throw error;
   }
 }
+
+/**
+ * Validates generated 3D mesh asset.
+ * @param {Object} data - { model_url, model_path }
+ */
+export async function validate3D(data) {
+  try {
+    const response = await fetch(`${API_BASE}/api/v1/validate-3d`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model_url: data.model_url || data.modelUrl,
+        model_path: data.model_path || data.modelPath,
+      }),
+    });
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.error || `Validation failed: ${response.statusText}`);
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('Validation API error:', error);
+    throw error;
+  }
+}
+
+export const researchProductViews = scrapeProductViews;
+

@@ -11,11 +11,14 @@ export default function Sidebar() {
     searchQuery 
   } = useProducts();
 
-  const filteredProducts = products.filter(p => 
-    p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    p.category?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    p.modelNumber?.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredProducts = products.filter(p => {
+    const q = searchQuery.toLowerCase();
+    const nameMatch = (p.name || 'Untitled Product').toLowerCase().includes(q);
+    const catMatch = (p.category || '').toLowerCase().includes(q);
+    const modelMatch = (p.modelNumber || '').toLowerCase().includes(q);
+    const brandMatch = (p.brand || '').toLowerCase().includes(q);
+    return nameMatch || catMatch || modelMatch || brandMatch;
+  });
 
   return (
     <aside className="w-80 flex-shrink-0 bg-white border-r border-[#E2E8F0] dark:bg-[#0E172E] dark:border-[#1E2C52] flex flex-col h-[calc(100vh-4rem)] transition-colors">
@@ -71,8 +74,8 @@ export default function Sidebar() {
                 {/* Info & Metrics */}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between gap-1 mb-1">
-                    <h2 className="text-xs font-semibold text-[#1C2434] dark:text-white truncate" title={product.name}>
-                      {product.name}
+                    <h2 className="text-xs font-semibold text-[#1C2434] dark:text-white truncate" title={product.name || 'Untitled Product'}>
+                      {product.name || 'Untitled Product'}
                     </h2>
                   </div>
 

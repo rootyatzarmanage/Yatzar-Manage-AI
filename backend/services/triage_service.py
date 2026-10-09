@@ -2,7 +2,7 @@
 Geometric Uncertainty and Viewpoint Triage Service.
 Evaluates single-view product seed images for rotational symmetry, quadrant occlusions,
 and azimuthal uncertainty. Implements a strict Metadata Priority Cascade for query generation:
-Priority 1 (Product ID) -> Priority 2 (Product Name + Model) -> Priority 3 (Name + Viewpoint Anchors)
+Priority 1 (Verified Manufacturer Identifier) -> Priority 2 (Product Name + Model) -> Priority 3 (Name + Viewpoint Anchors)
 -> Priority 4 (Category + Context) -> Priority 5 (User Fallback).
 """
 
@@ -13,6 +13,17 @@ import base64
 import logging
 from typing import Optional, List, Dict, Any, Union
 from pydantic import BaseModel, Field
+
+from services.identifier_policy import (
+    is_safe_manufacturer_identifier,
+    extract_verified_manufacturer_identifier,
+    extract_brand_or_manufacturer,
+    sanitize_query_against_internal_leakage,
+    GENERIC_PLACEHOLDERS,
+    ProductIdentity,
+    CanonicalProductIdentity,
+    normalize_product_identity
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,112 +58,68 @@ def build_prioritized_search_queries(
     product_id: str = "",
     product_name: str = "",
     model_number: str = "",
+    part_number: str = "",
+    sku: str = "",
+    brand: str = "",
     category: str = "",
     target_angles: Optional[List[str]] = None,
     raw_queries: Optional[List[str]] = None,
-    dynamic_urls: Optional[List[str]] = None
+    dynamic_urls: Optional[List[str]] = None,
+    article_number: str = "",
+    user_prompt: str = ""
 ) -> List[Dict[str, Any]]:
     """
-    Constructs a prioritized search query ladder following the Metadata Priority Cascade:
-      - Priority 1 (Product ID / SKU / Part Number): Exact identifier in quotes (e.g., "M393A4K40BB1-CRC")
-      - Priority 2 (Product Name + Model Number): Brand/product title with specific model (e.g., "Sony WH-1000XM5")
-      - Priority 3 (Product Name + Viewpoint Anchors): Exact quote matching paired with angle keywords
-                   (front view, side profile, rear panel, isometric angle)
-      - Priority 4 (Category + Model Context): Category with model/descriptors (e.g., "Industrial Equipment Alfa Laval heat exchanger orthogonal")
-      - Priority 5 (Direct URLs / Fallback Query): Direct user-supplied query or scrape targets
-
-    Returns:
-        List of dicts: [{'priority': int, 'query': str, 'angle_tag': str, 'source_tier': str}, ...]
+    Constructs a prioritized search query ladder following the Retrieval V2
+    Multi-Family Query Strategy (Exact -> Viewpoints -> Technical -> Category Fallback).
     """
+    from services.query_planner import QueryPlanner
+
+    p_ident = ProductIdentity(
+        internal_id=product_id or None,
+        brand=brand or None,
+        product_name=product_name or "",
+        model_number=model_number or sku or None,
+        article_number=article_number or None,
+        part_number=part_number or None,
+        sku=sku or None,
+        category=category or None,
+        source_urls=dynamic_urls or [],
+        user_prompt=user_prompt or None
+    )
+
+    planned = QueryPlanner.plan(p_ident)
+
+    # Convert to prioritized query dicts
     queries: List[Dict[str, Any]] = []
-    seen_query_strings = set()
+    for pq in planned:
+        queries.append({
+            "priority": pq.pass_stage,
+            "query": pq.query,
+            "angle_tag": pq.angle_tag,
+            "source_tier": f"Pass {pq.pass_stage} ({pq.query_family.value})",
+            "target_evidence": pq.target_evidence,
+            "query_family": pq.query_family.value,
+            "identifiers_used": pq.identifiers_used,
+            "expected_information": pq.expected_information
+        })
 
-    p_id = (product_id or "").strip()
-    p_name = (product_name or "").strip()
-    p_model = (model_number or "").strip()
-    p_cat = (category or "").strip()
-
-    # Filter out generic placeholder IDs
-    is_valid_id = bool(p_id and p_id.upper() not in ["PROD-GEN-01", "SKU-01", "CUSTOM", "NONE", "N/A"])
-    is_valid_model = bool(p_model and p_model.upper() not in ["PROD-GEN-01", "SKU-01", "NONE", "N/A"])
-    is_valid_name = bool(p_name and p_name.lower() not in ["product asset", "custom product asset", "product", "untitled"])
-
-    def add_query(priority: int, q_str: str, angle_tag: str, tier_desc: str):
-        cleaned = q_str.strip()
-        if cleaned and cleaned not in seen_query_strings:
-            seen_query_strings.add(cleaned)
-            queries.append({
-                "priority": priority,
-                "query": cleaned,
-                "angle_tag": angle_tag,
-                "source_tier": tier_desc
-            })
-
-    # -------------------------------------------------------------
-    # PRIORITY 1: Exact Product ID / SKU / Part Number in Quotes
-    # -------------------------------------------------------------
-    if is_valid_id:
-        clean_id = p_id.strip('"')
-        add_query(1, f'"{clean_id}"', "Front Reference", "Priority 1 (Exact Product ID / SKU)")
-        add_query(1, f'"{clean_id}" photo', "Isometric Angle", "Priority 1 (Exact Product ID / SKU)")
-
-    # -------------------------------------------------------------
-    # PRIORITY 2: Product Name + Model Number
-    # -------------------------------------------------------------
-    if is_valid_name and is_valid_model:
-        clean_name = p_name.strip('"')
-        clean_model = p_model.strip('"')
-        add_query(2, f'"{clean_name} {clean_model}"', "Isometric Angle", "Priority 2 (Product Name + Model Number)")
-        add_query(2, f'"{clean_name}" "{clean_model}" product photo', "Front Reference", "Priority 2 (Product Name + Model Number)")
-    elif is_valid_model and not is_valid_name:
-        clean_model = p_model.strip('"')
-        add_query(2, f'"{clean_model}" official product photo', "Isometric Angle", "Priority 2 (Model Number Only)")
-
-    # -------------------------------------------------------------
-    # PRIORITY 3: Product Name + Viewpoint Anchors
-    # -------------------------------------------------------------
-    base_name = p_name.strip('"') if is_valid_name else (p_model.strip('"') if is_valid_model else "Product")
-    if is_valid_name or is_valid_model:
-        clean_base = f'"{base_name}"'
-        add_query(3, f'{clean_base} front view', "Front Reference", "Priority 3 (Name + Viewpoint Anchor: Front)")
-        add_query(3, f'{clean_base} side profile', "Side Profile", "Priority 3 (Name + Viewpoint Anchor: Side)")
-        add_query(3, f'{clean_base} rear panel', "Rear View", "Priority 3 (Name + Viewpoint Anchor: Rear)")
-        add_query(3, f'{clean_base} isometric angle', "Isometric Angle", "Priority 3 (Name + Viewpoint Anchor: Isometric)")
-
-    # -------------------------------------------------------------
-    # PRIORITY 4: Category + Model Context
-    # -------------------------------------------------------------
-    if p_cat:
-        clean_cat = p_cat.strip('"')
-        descriptor = f"{clean_cat} {base_name}" if base_name != "Product" else clean_cat
-        add_query(4, f'"{descriptor}" orthogonal view', "Side Profile", "Priority 4 (Category + Context)")
-        add_query(4, f'{clean_cat} {base_name} technical diagram', "Rear View", "Priority 4 (Category + Context)")
-
-    # -------------------------------------------------------------
-    # PRIORITY 5: Direct URLs / User Raw Queries Fallback
-    # -------------------------------------------------------------
+    # Include raw queries if specifically passed by caller
     if raw_queries:
+        seen = {q["query"] for q in queries}
         for rq in raw_queries:
-            if rq and rq.strip():
-                ql = rq.lower()
-                tag = "Rear View" if ("rear" in ql or "back" in ql) else ("Side Profile" if ("side" in ql or "profile" in ql) else ("Front Reference" if "front" in ql else "Isometric Angle"))
-                add_query(5, rq.strip(), tag, "Priority 5 (User Query / Fallback)")
+            if rq and rq.strip() and rq.strip() not in seen:
+                seen.add(rq.strip())
+                queries.append({
+                    "priority": 4,
+                    "query": rq.strip(),
+                    "angle_tag": "Isometric Angle",
+                    "source_tier": "Priority 4 (User Query Fallback)",
+                    "target_evidence": "CATEGORY_CONTEXT",
+                    "query_family": "USER_FALLBACK",
+                    "identifiers_used": ["user_prompt"],
+                    "expected_information": f"Direct user query: {rq.strip()}"
+                })
 
-    if dynamic_urls:
-        for du in dynamic_urls:
-            if du and du.strip():
-                add_query(5, du.strip(), "Isometric Angle", "Priority 5 (Direct Scrape URL)")
-
-    # Fallback if empty
-    if not queries:
-        clean_base = f'"{base_name}"'
-        add_query(3, f'{clean_base} front view', "Front Reference", "Priority 3 (Fallback)")
-        add_query(3, f'{clean_base} side profile', "Side Profile", "Priority 3 (Fallback)")
-        add_query(3, f'{clean_base} rear view', "Rear View", "Priority 3 (Fallback)")
-        add_query(3, f'{clean_base} perspective angle', "Isometric Angle", "Priority 3 (Fallback)")
-
-    # Sort queries strictly by priority tier (1 -> 2 -> 3 -> 4 -> 5)
-    queries.sort(key=lambda x: x["priority"])
     return queries
 
 
@@ -191,30 +158,38 @@ Respond ONLY with the JSON object. Do not include markdown formatting or backtic
 
 
 def _heuristic_triage(
-    product_title: str,
-    product_sku: str,
+    product_title: str = "",
+    product_sku: str = "",
     category: str = "",
     product_id: str = "",
+    model_number: str = "",
+    part_number: str = "",
+    brand: str = "",
     image_path: Optional[str] = None
 ) -> TriageResult:
     """
     Deterministic fallback heuristic implementing the strict Metadata Priority Cascade.
     """
     title_raw = (product_title or "").strip()
-    sku_raw = (product_sku or "").strip()
     cat_raw = (category or "").strip()
-    id_raw = (product_id or sku_raw).strip()
+    id_raw = (product_id or "").strip()
+    model_raw = (model_number or product_sku or "").strip()
+    part_raw = (part_number or "").strip()
+    brand_raw = (brand or "").strip()
 
     title_lower = title_raw.lower()
-    sku_lower = sku_raw.lower()
+    sku_lower = model_raw.lower()
     cat_lower = cat_raw.lower()
-    combined = f"{title_lower} {sku_lower} {cat_lower}"
+    combined = f"{title_lower} {sku_lower} {cat_lower} {brand_raw.lower()}"
 
-    # Build prioritized queries via Metadata Priority Cascade
+    # Build prioritized queries via Retrieval V2 QueryPlanner
     prioritized_list = build_prioritized_search_queries(
         product_id=id_raw,
         product_name=title_raw,
-        model_number=sku_raw,
+        model_number=model_raw,
+        part_number=part_raw,
+        sku=product_sku,
+        brand=brand_raw,
         category=cat_raw
     )
     query_strings = [item["query"] for item in prioritized_list]
@@ -236,8 +211,26 @@ def _heuristic_triage(
             source="heuristic_fallback"
         )
 
-    # 2. Benchmark Asset: iPhone / Smartphone / Electronics
-    if "iphone" in combined or "smartphone" in combined or "phone" in combined:
+    # 2. Sinks, Basins, Faucets & Sanitary Ware (e.g. Hansgrohe, Roca)
+    sanitary_keywords = ["sink", "basin", "combi", "faucet", "tap", "drain", "sanitary", "urinal", "toilet", "vanity", "hansgrohe", "grohe", "roca"]
+    if any(k in combined for k in sanitary_keywords):
+        quad = QuadUncertainty(front=0.05, rear=0.72, sides=0.58, bottom=0.85)
+        max_blindspot = max(quad.rear, quad.sides, quad.bottom)
+        skip = max_blindspot <= 0.15
+        return TriageResult(
+            rotational_symmetry=False,
+            symmetry_confidence=0.92,
+            quad_uncertainty=quad,
+            skip_deep_scraping=skip,
+            target_search_queries=query_strings,
+            prioritized_queries=prioritized_list,
+            max_scrape_budget=16 if not skip else 5,
+            reasoning="Planar sanitary ware with critical unseen underside basin structure, mounting flanges, and overflow/drain fixtures.",
+            source="heuristic_fallback"
+        )
+
+    # 3. Benchmark Asset: iPhone / Smartphone / Electronics / Projectors
+    if "iphone" in combined or "smartphone" in combined or "phone" in combined or "projector" in combined or "laser" in combined or "viewsonic" in combined:
         quad = QuadUncertainty(front=0.05, rear=0.48, sides=0.32, bottom=0.42)
         max_blindspot = max(quad.rear, quad.sides, quad.bottom)
         skip = max_blindspot <= 0.15
@@ -249,48 +242,12 @@ def _heuristic_triage(
             target_search_queries=query_strings,
             prioritized_queries=prioritized_list,
             max_scrape_budget=14 if not skip else 4,
-            reasoning="Prismatic slab with camera bump asymmetry and specific bottom speaker/port cutouts.",
+            reasoning="Prismatic electronics enclosure with asymmetric IO connector panels, ventilation grilles, and lens mount.",
             source="heuristic_fallback"
         )
 
-    # 3. Fans & Air Handling Devices
-    fan_keywords = ["fan", "blower", "cooler", "ventilator", "turbine"]
-    if any(k in combined for k in fan_keywords):
-        quad = QuadUncertainty(front=0.05, rear=0.68, sides=0.55, bottom=0.38)
-        max_blindspot = max(quad.rear, quad.sides, quad.bottom)
-        skip = max_blindspot <= 0.15
-        return TriageResult(
-            rotational_symmetry=False,
-            symmetry_confidence=0.89,
-            quad_uncertainty=quad,
-            skip_deep_scraping=skip,
-            target_search_queries=query_strings,
-            prioritized_queries=prioritized_list,
-            max_scrape_budget=16 if not skip else 5,
-            reasoning="Rotational blade symmetry enclosed in asymmetrical cage with distinct rear motor housing and base stand.",
-            source="heuristic_fallback"
-        )
-
-    # 4. Footwear & Apparel
-    shoe_keywords = ["shoe", "sneaker", "boot", "cleat", "loafer", "sandal", "footwear", "air max", "nike", "adidas"]
-    if any(k in combined for k in shoe_keywords):
-        quad = QuadUncertainty(front=0.05, rear=0.62, sides=0.35, bottom=0.75)
-        max_blindspot = max(quad.rear, quad.sides, quad.bottom)
-        skip = max_blindspot <= 0.15
-        return TriageResult(
-            rotational_symmetry=False,
-            symmetry_confidence=0.86,
-            quad_uncertainty=quad,
-            skip_deep_scraping=skip,
-            target_search_queries=query_strings,
-            prioritized_queries=prioritized_list,
-            max_scrape_budget=15 if not skip else 4,
-            reasoning="Bilateral asymmetric footwear with critical outsole tread grooves and rear heel collar structure.",
-            source="heuristic_fallback"
-        )
-
-    # 5. Rotationally / Radially Symmetric Objects
-    symmetric_keywords = ["bottle", "can", "cup", "mug", "cylinder", "pipe", "ball", "wheel", "tire", "vase", "bowl", "flask"]
+    # 4. Rotationally / Radially Symmetric Objects (Bottles, Cans, Cylinders)
+    symmetric_keywords = ["bottle", "can", "cup", "mug", "cylinder", "pipe", "ball", "wheel", "tire", "vase", "bowl", "flask", "extinguisher"]
     if any(k in combined for k in symmetric_keywords):
         quad = QuadUncertainty(front=0.05, rear=0.10, sides=0.10, bottom=0.14)
         skip = True
@@ -303,6 +260,24 @@ def _heuristic_triage(
             prioritized_queries=prioritized_list,
             max_scrape_budget=4,
             reasoning="High rotational symmetry along vertical axis; novel viewpoints can be inferred analytically.",
+            source="heuristic_fallback"
+        )
+
+    # 5. Footwear & Apparel (Generic category)
+    shoe_keywords = ["shoe", "sneaker", "boot", "cleat", "loafer", "sandal", "footwear"]
+    if any(k in combined for k in shoe_keywords):
+        quad = QuadUncertainty(front=0.05, rear=0.62, sides=0.35, bottom=0.75)
+        max_blindspot = max(quad.rear, quad.sides, quad.bottom)
+        skip = max_blindspot <= 0.15
+        return TriageResult(
+            rotational_symmetry=False,
+            symmetry_confidence=0.86,
+            quad_uncertainty=quad,
+            skip_deep_scraping=skip,
+            target_search_queries=query_strings,
+            prioritized_queries=prioritized_list,
+            max_scrape_budget=15 if not skip else 4,
+            reasoning="Bilateral asymmetric footwear with outsole tread pattern and rear heel collar geometry.",
             source="heuristic_fallback"
         )
 
@@ -323,12 +298,16 @@ def _heuristic_triage(
     )
 
 
+
 def _call_vision_llm(
     image_path: str,
     product_title: str,
     product_sku: str,
     category: str = "",
-    product_id: str = ""
+    product_id: str = "",
+    model_number: str = "",
+    part_number: str = "",
+    brand: str = ""
 ) -> Optional[TriageResult]:
     """
     Calls Gemini or OpenAI Vision API if configured via environment variables.
@@ -346,7 +325,7 @@ def _call_vision_llm(
         with open(image_path, "rb") as f:
             b64_image = base64.b64encode(f.read()).decode("utf-8")
 
-        prompt = build_vision_llm_prompt(product_title, product_sku, category)
+        prompt = build_vision_llm_prompt(product_title, model_number or product_sku, category)
 
         # Gemini API call if key present
         if gemini_key:
@@ -376,11 +355,14 @@ def _call_vision_llm(
                 parsed = json.loads(raw_text)
                 parsed["source"] = "vision_llm_gemini"
 
-                # Augment with prioritized search queries
+                # Augment with prioritized search queries enforcing provenance
                 p_queries = build_prioritized_search_queries(
-                    product_id=product_id or product_sku,
+                    product_id=product_id,
                     product_name=product_title,
-                    model_number=product_sku,
+                    model_number=model_number or product_sku,
+                    part_number=part_number,
+                    sku=product_sku,
+                    brand=brand,
                     category=category,
                     raw_queries=parsed.get("target_search_queries")
                 )
@@ -420,9 +402,12 @@ def _call_vision_llm(
                 parsed["source"] = "vision_llm_openai"
 
                 p_queries = build_prioritized_search_queries(
-                    product_id=product_id or product_sku,
+                    product_id=product_id,
                     product_name=product_title,
-                    model_number=product_sku,
+                    model_number=model_number or product_sku,
+                    part_number=part_number,
+                    sku=product_sku,
+                    brand=brand,
                     category=category,
                     raw_queries=parsed.get("target_search_queries")
                 )
@@ -441,7 +426,10 @@ def evaluate_geometric_uncertainty(
     product_title: str = "",
     product_sku: str = "",
     category: str = "",
-    product_id: str = ""
+    product_id: str = "",
+    model_number: str = "",
+    part_number: str = "",
+    brand: str = ""
 ) -> Dict[str, Any]:
     """
     Main entry point for Stage 1: Geometric Uncertainty and Viewpoint Triage.
@@ -457,7 +445,10 @@ def evaluate_geometric_uncertainty(
             product_title=product_title,
             product_sku=product_sku,
             category=category,
-            product_id=product_id
+            product_id=product_id,
+            model_number=model_number,
+            part_number=part_number,
+            brand=brand
         )
 
     # Deterministic heuristic fallback
@@ -467,6 +458,9 @@ def evaluate_geometric_uncertainty(
             product_sku=product_sku,
             category=category,
             product_id=product_id,
+            model_number=model_number,
+            part_number=part_number,
+            brand=brand,
             image_path=image_path
         )
 
