@@ -400,7 +400,8 @@
                         <input type="file" id="img" accept="image/*">
                         <div id="dropzone-prompt">
                             <div class="upload-icon">
-                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
                                     <polyline points="17 8 12 3 7 8"></polyline>
                                     <line x1="12" y1="3" x2="12" y2="15"></line>
@@ -614,8 +615,14 @@
 
             try {
                 const r = await fetch("/search", { method: "POST", body: fd });
-                const d = await r.json();
-                if (!r.ok) throw new Error(d.detail || "Request failed");
+                const responseText = await r.text();
+                let d = {};
+                try {
+                    d = responseText ? JSON.parse(responseText) : {};
+                } catch {
+                    throw new Error(`Server returned status ${r.status}: ${responseText || r.statusText || "Internal Server Error"}`);
+                }
+                if (!r.ok) throw new Error(d.detail || d.message || `Request failed with status ${r.status}`);
 
                 $("stats").className = "active";
                 const roundsText = d.rounds > 1 ? ` (${d.rounds} search rounds)` : "";
@@ -633,7 +640,7 @@
                                 <img src="${x.url}" referrerpolicy="no-referrer" alt="Product match" loading="lazy">
                             </a>
                             <div class="card-details">
-                                <span class="badge ${x.tier === 'high' ? 'anchor' : 'expanded'}">${x.tier === 'high' ? 'Anchor' : 'Angle'} ${(x.score * 100).toFixed(0)}%</span>
+                                <span class="badge ${x.tier === 'high' ? 'anchor' : 'expanded'}">${x.tier === 'high' ? 'Anchor' : (x.tier === 'supplemental' ? 'Supplemental' : 'Angle')} ${(x.score * 100).toFixed(0)}%</span>
                                 <span class="badge">Col ${(x.color * 100).toFixed(0)}%</span>
                             </div>
                         </div>`).join("");

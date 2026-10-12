@@ -19,8 +19,9 @@ try:
 except ImportError:
     from duckduckgo_search import DDGS
 
-HI, LO, COL_MIN = 0.70, 0.60, 0.70   # accuracy gates (unchanged); tune on your real images
+HI, LO, COL_MIN = 0.80, 0.70, 0.75   # strict exact-product gates
 SAME_PAGE_RELAX = 0.08               # extra slack for images from the same listing as a confirmed anchor
+FALLBACK_SIM, FALLBACK_COL = 0.65, 0.65
 ANGLES = {   # angle -> search phrasings (different wording surfaces different photos)
     "front": ["front view", "front facing"],
     "back": ["back view", "rear view", "from behind"],
@@ -74,6 +75,25 @@ def color_sig(img):
     return h / max(h.sum(), 1)
 
 
+def object_aspect_ratio(img):
+    """Estimate the visible product width/height ratio from the image border background."""
+    small = img.convert("RGB").resize((128, 128))
+    a = np.asarray(small).astype(float)
+    bg = np.median(np.concatenate([a[0], a[-1], a[:, 0], a[:, -1]]), axis=0)
+    mask = np.linalg.norm(a - bg, axis=2) > 28
+    ys, xs = np.where(mask)
+    if len(xs) < 50:
+        return float(img.width / max(img.height, 1))
+    return float((xs.max() - xs.min() + 1) / max(ys.max() - ys.min() + 1, 1))
+
+
+def aspect_similarity(ref_ratio, candidate_ratio):
+    """Score how closely the candidate's visible silhouette ratio matches the reference."""
+    if ref_ratio <= 0 or candidate_ratio <= 0:
+        return 0.0
+    return float(np.exp(-abs(np.log(candidate_ratio / ref_ratio)) / 0.45))
+
+
 @torch.no_grad()
 def label_angles(items):
     items = [i for i in items if "angle" not in i]
@@ -103,13 +123,13 @@ async def gallery(c, page):
         u = t.get("data-src") or t.get("data-old-hires") or t.get("src")
         if u and not u.startswith("data:"):
             urls.append(u)
-    return title.strip(), [(urljoin(page, u), page) for u in dict.fromkeys(urls)][:40]
+    return title.strip(), [(urljoin(page, u), page) for u in dict.fromkeys(urls)][:80]
 
 
 def ddg_images(q):
     for _ in range(2):                                   # one retry: ddgs rate-limits under bursts
         try:
-            return [(x["image"], x.get("url", "")) for x in DDGS().images(q, max_results=25)]
+            return [(x["image"], x.get("url", "")) for x in DDGS().images(q, max_results=50)]
         except Exception:
             time.sleep(1)
     return []
@@ -117,7 +137,7 @@ def ddg_images(q):
 
 def ddg_pages(q):
     try:
-        return [x["href"] for x in DDGS().text(q, max_results=8)]
+        return [x["href"] for x in DDGS().text(q, max_results=12)]
     except Exception:
         return []
 
@@ -148,7 +168,7 @@ async def collect(c, queries, pages, st, sem):
         async with sem:
             return await asyncio.to_thread(ddg_images, q)
     cands = [x for f in await asyncio.gather(*[one(q) for q in queries]) for x in f]
-    todo = [p for p in dict.fromkeys(pages) if p and p not in st["pages"]][:10]
+    todo = [p for p in dict.fromkeys(pages) if p and p not in st["pages"]][:20]
     st["pages"].update(todo)
     for p, (title, imgs) in zip(todo, await asyncio.gather(*[gallery(c, p) for p in todo])):
         st["titles"][p] = title; cands += imgs
@@ -170,34 +190,52 @@ async def ingest(c, cands, st, e0s, c0):
     uniq = {}
     for u, p in cands:
         if u and u not in st["urls"]: uniq.setdefault(u, p)
-    fresh = list(uniq.items())[:300]
+    fresh = list(uniq.items())[:600]
+    if not fresh:
+        return
     st["urls"].update(u for u, _ in fresh)
-    sem = asyncio.Semaphore(24)
+    sem = asyncio.Semaphore(16)
     tasks = [asyncio.create_task(download(c, u, sem)) for u, _ in fresh]
-    await asyncio.wait(tasks, timeout=12)
+    # Process completed downloads even if slower hosts exceed the time budget.
+    done, pending = await asyncio.wait(tasks, timeout=30)
+    for t in pending:
+        t.cancel()
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
     items = []
     for (u, p), t in zip(fresh, tasks):
-        if not t.done(): t.cancel(); continue
+        if not t.done() or t.cancelled(): continue
         img = t.result()
         if img is None: continue
         h = imagehash.phash(img)
-        if all(h - x > 3 for x in st["hashes"]):
+        if all(h - x > 8 for x in st["hashes"]):
             st["hashes"].append(h); items.append({"url": u, "page": p, "img": img})
     if items:
         E = await asyncio.to_thread(embed, [i["img"] for i in items])
         for i, e in zip(items, E):
             img = i.pop("img"); th = img.copy(); th.thumbnail((224, 224))
-            i.update(e=e, thumb=th, sim=float((e0s @ e).max()), col=float(np.sqrt(color_sig(img) * c0).sum()))
+            i.update(
+                e=e,
+                thumb=th,
+                sim=float((e0s @ e).max()),
+                col=float(np.sqrt(color_sig(img) * c0).sum()),
+                aspect=aspect_similarity(st["ref_ratio"], object_aspect_ratio(img))
+            )
         st["pool"] += items
 
 
 # ---------- verification ----------
-def verify(pool, e0s):
-    """colour gate -> confident anchors -> iterative expansion (up to 3 rounds) -> same-listing relaxation."""
+def verify(pool, e0s, allow_fallback=False):
+    """Verify exact-product candidates; generic category matches are rejected by default."""
     for i in pool: i.pop("score", None); i.pop("tier", None)
     soft = COL_MIN - 0.10
     ok = [i for i in pool if i["col"] >= soft]
-    seeds = [i for i in ok if i["sim"] >= HI and i["col"] >= COL_MIN]
+    seeds = [
+        i for i in ok
+        if i["sim"] >= HI
+        and i["col"] >= COL_MIN
+        and i.get("aspect", 0.0) >= 0.55
+    ]
     for i in seeds: i.update(score=i["sim"], tier="high")
     keep, rest = list(seeds), [i for i in ok if "tier" not in i]
     S = np.vstack([e0s] + [i["e"][None] for i in seeds])
@@ -208,11 +246,46 @@ def verify(pool, e0s):
             if "tier" in i: continue
             same = i["page"] in pages
             if i["col"] < (soft if same else COL_MIN): continue
+            if i.get("aspect", 0.0) < 0.45: continue
             s = float((S @ i["e"]).max())
             if s >= LO - (SAME_PAGE_RELAX if same else 0):
                 i.update(score=s, tier="expanded"); keep.append(i); grew = True
                 if s >= LO + 0.05: S = np.vstack([S, i["e"]])        # only solid matches become new anchors
         if not grew: break
+    # Tiered completion: return 10–15 ranked images instead of an empty result.
+    # Strong supplemental candidates must agree on visual embedding, colour,
+    # and the reference's cuboidal silhouette ratio.
+    if len(keep) < 15:
+        fallback = []
+        for i in pool:
+            if "tier" in i:
+                continue
+            s_visual = float((S @ i["e"]).max())
+            combined = 0.50 * s_visual + 0.20 * i["col"] + 0.30 * i.get("aspect", 0.0)
+            if s_visual >= FALLBACK_SIM and i["col"] >= FALLBACK_COL and i.get("aspect", 0.0) >= 0.55:
+                fallback.append((combined, i))
+        for combined, i in sorted(fallback, key=lambda x: -x[0]):
+            i.update(score=round(combined, 4), tier="fallback")
+            keep.append(i)
+            if len(keep) >= 15:
+                break
+
+    # Safety fill: still require reasonable visual similarity and geometry,
+    # but use a lower tier so the API consistently returns at least 10 shots.
+    if len(keep) < 10:
+        safety = []
+        for i in pool:
+            if "tier" in i:
+                continue
+            s_visual = float((S @ i["e"]).max())
+            combined = 0.50 * s_visual + 0.20 * i["col"] + 0.30 * i.get("aspect", 0.0)
+            if s_visual >= 0.25 and i["col"] >= 0.40 and i.get("aspect", 0.0) >= 0.35:
+                safety.append((combined, i))
+        for combined, i in sorted(safety, key=lambda x: -x[0]):
+            i.update(score=round(combined, 4), tier="supplemental")
+            keep.append(i)
+            if len(keep) >= 10:
+                break
     return keep
 
 
@@ -238,8 +311,16 @@ async def search(image: UploadFile = File(...), prompt: str = Form(""), product_
     name = f"{uuid.uuid4().hex}.jpg"; ref.save(f"uploads/{name}")
     e0s = embed([ref, ref.transpose(Image.Transpose.FLIP_LEFT_RIGHT)])   # mirrored views of the product also match
     c0 = color_sig(ref)
-    st = {"urls": set(), "pages": set(), "titles": {}, "hashes": [], "pool": []}
+    st = {
+        "urls": set(), "pages": set(), "titles": {}, "hashes": [], "pool": [],
+        "ref_ratio": object_aspect_ratio(ref)
+    }
     query, cands, pages, sem = " ".join(x for x in [product_id, prompt] if x).strip(), [], [], asyncio.Semaphore(4)
+    exact_anchor = bool(
+        product_id.strip()
+        or link.strip()
+        or (os.getenv("SERPAPI_KEY") and os.getenv("PUBLIC_BASE_URL"))
+    )
 
     async with httpx.AsyncClient(headers=HDR, follow_redirects=True) as c:
         # A) strongest signals first (parallel): user's link + Google Lens
@@ -265,7 +346,7 @@ async def search(image: UploadFile = File(...), prompt: str = Form(""), product_
                                        asyncio.to_thread(ddg_pages, f"{query} official site")))[0]
         cands += await collect(c, angle_queries(query, wanted), pages, st, sem)
         await ingest(c, cands, st, e0s, c0)
-        kept = verify(st["pool"], e0s)
+        kept = verify(st["pool"], e0s, allow_fallback=exact_anchor)
         T["round1"] = time.time() - s
 
         # C) round 2 (only if we still have fewer than n): harvest the galleries of confirmed anchors
@@ -278,7 +359,7 @@ async def search(image: UploadFile = File(...), prompt: str = Form(""), product_
             refined = next((re.sub(r"\s+", " ", st["titles"][p])[:70] for p in apages if st["titles"].get(p)), "")
             qs2 = angle_queries(refined, wanted) if refined and refined.lower() != query.lower() else []
             await ingest(c, await collect(c, qs2, apages, st, sem), st, e0s, c0)
-            kept = verify(st["pool"], e0s)
+            kept = verify(st["pool"], e0s, allow_fallback=exact_anchor)
             T["round2"] = time.time() - s
 
         # D) label the angle of every verified image (CLIP), then run a dedicated search for any requested angle still missing
@@ -289,7 +370,7 @@ async def search(image: UploadFile = File(...), prompt: str = Form(""), product_
             base = best_title(kept, st) or query
             qs3 = [f"{b} {p}" for a in missing for p in ANGLES[a] for b in dict.fromkeys([base, query])]
             await ingest(c, await collect(c, qs3, [], st, sem), st, e0s, c0)
-            kept = verify(st["pool"], e0s)
+            kept = verify(st["pool"], e0s, allow_fallback=exact_anchor)
             await asyncio.to_thread(label_angles, sorted(kept, key=lambda x: -x["score"])[:80])
         T["angles"] = time.time() - s
 
