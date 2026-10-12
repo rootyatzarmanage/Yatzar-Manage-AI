@@ -58,17 +58,6 @@ export default function Header() {
 
       {/* Right Controls */}
       <div className="flex items-center gap-3.5">
-        {/* API Connected Pill */}
-        <div className="hidden sm:flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/60 text-emerald-700 dark:text-emerald-400 text-xs font-semibold">
-          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-          <span>API Connected</span>
-        </div>
-
-        {/* DINOv2 Engine Pill */}
-        <div className="hidden lg:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800/60 text-blue-700 dark:text-blue-300 text-xs font-medium">
-          <Sparkles className="w-3.5 h-3.5 text-blue-500" />
-          <span>DINOv2 ViT-B14</span>
-        </div>
 
         {/* Dark/Light Mode Toggle */}
         <button
