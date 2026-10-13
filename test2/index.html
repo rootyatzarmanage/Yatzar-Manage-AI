@@ -4,15 +4,20 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Product Image Finder</title>
+    <title>Product Image Finder & 3D Studio</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+        rel="stylesheet">
+    <!-- Google Model Viewer for interactive 3D rendering -->
+    <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.5.0/model-viewer.min.js"></script>
     <style>
         :root {
             --primary: #3b82f6;
             --primary-hover: #2563eb;
             --primary-light: #eff6ff;
+            --accent: #8b5cf6;
             --bg-color: #f8fafc;
             --card-bg: #ffffff;
             --text-main: #0f172a;
@@ -26,6 +31,46 @@
             --shadow-hover: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.08);
         }
 
+        body.dark {
+            --bg-color: #0f172a;
+            --card-bg: #111827;
+            --text-main: #e5e7eb;
+            --text-muted: #94a3b8;
+            --border-color: #334155;
+            --border-hover: #64748b;
+            --primary-light: #172554;
+            --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.35);
+            --shadow-md: 0 4px 10px rgba(0, 0, 0, 0.35);
+        }
+
+        body.dark .header h1,
+        body.dark .studio-title-wrap h2,
+        body.dark label,
+        body.dark .card-details,
+        body.dark .grid-header h3 { color: #f8fafc; }
+        body.dark input,
+        body.dark .dropzone,
+        body.dark .studio-card,
+        body.dark .card,
+        body.dark .main-card { background: var(--card-bg); color: var(--text-main); }
+        body.dark input::placeholder { color: #64748b; }
+        body.dark .dropzone { background: #0b1220; }
+        body.dark .tab-btn { color: #94a3b8; }
+        body.dark .tab-btn.active { color: #93c5fd; }
+        body.dark .btn-studio-back { background: #1e293b; color: #e2e8f0; }
+
+        .theme-toggle {
+            border: 1px solid var(--border-color);
+            background: var(--card-bg);
+            color: var(--text-main);
+            border-radius: 999px;
+            padding: 8px 12px;
+            cursor: pointer;
+            font-weight: 600;
+            box-shadow: var(--shadow-sm);
+        }
+        .theme-toggle:hover { border-color: var(--primary); }
+
         * {
             box-sizing: border-box;
             margin: 0;
@@ -38,12 +83,16 @@
             color: var(--text-main);
             max-width: 1060px;
             margin: 32px auto;
-            padding: 0 20px 48px;
+            padding: 0 20px 80px;
             line-height: 1.5;
         }
 
         .header {
             margin-bottom: 24px;
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 16px;
         }
 
         .header h1 {
@@ -289,23 +338,45 @@
             display: block;
         }
 
+        .grid-header {
+            margin-top: 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .grid-header h3 {
+            font-size: 16px;
+            font-weight: 600;
+            color: #1e293b;
+        }
+
+        .grid-tip {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
         #grid {
-            margin-top: 20px;
+            margin-top: 14px;
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
             gap: 16px;
         }
 
+        /* Card with Selection Overlay */
         .card {
             background: var(--card-bg);
-            border: 1px solid var(--border-color);
+            border: 2px solid var(--border-color);
             border-radius: var(--radius-md);
             overflow: hidden;
             font-size: 12px;
             box-shadow: var(--shadow-sm);
-            transition: transform 0.2s ease, box-shadow 0.2s ease;
+            transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
             display: flex;
             flex-direction: column;
+            position: relative;
+            cursor: pointer;
+            user-select: none;
         }
 
         .card:hover {
@@ -314,22 +385,61 @@
             border-color: var(--border-hover);
         }
 
-        .card a {
-            display: block;
-            text-decoration: none;
+        .card.selected {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.25), 0 8px 16px rgba(59, 130, 246, 0.15);
+        }
+
+        .card-select-btn {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            z-index: 10;
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.9);
+            border: 2px solid #cbd5e1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: transparent;
+            transition: all 0.2s ease;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        .card:hover .card-select-btn {
+            border-color: var(--primary);
+            background: #ffffff;
+        }
+
+        .card.selected .card-select-btn {
+            background: var(--primary);
+            border-color: var(--primary);
+            color: #ffffff;
+            transform: scale(1.05);
+        }
+
+        .img-wrap {
+            width: 100%;
+            height: 180px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #ffffff;
+            padding: 8px;
+            overflow: hidden;
         }
 
         .card img {
             width: 100%;
-            height: 180px;
+            height: 100%;
             object-fit: contain;
-            background: #ffffff;
-            padding: 8px;
             transition: transform 0.2s ease;
         }
 
         .card:hover img {
-            transform: scale(1.03);
+            transform: scale(1.04);
         }
 
         .card-details {
@@ -362,6 +472,20 @@
             color: #3730a3;
         }
 
+        .link-src {
+            color: var(--text-muted);
+            text-decoration: none;
+            padding: 2px 5px;
+            border-radius: 4px;
+            font-size: 13px;
+            font-weight: bold;
+            transition: color 0.15s;
+        }
+
+        .link-src:hover {
+            color: var(--primary);
+        }
+
         .err {
             color: #dc2626;
             background: #fef2f2;
@@ -377,89 +501,732 @@
         .url-box.active {
             display: block;
         }
+
+        /* Floating Selection Action Bar */
+        .selection-bar {
+            position: fixed;
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%) translateY(140%);
+            background: rgba(15, 23, 42, 0.94);
+            backdrop-filter: blur(14px);
+            -webkit-backdrop-filter: blur(14px);
+            color: #ffffff;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 9999px;
+            padding: 10px 24px;
+            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            z-index: 1000;
+            transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+            max-width: 90vw;
+        }
+
+        .selection-bar.active {
+            transform: translateX(-50%) translateY(0);
+        }
+
+        .selection-info {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 13px;
+            font-weight: 500;
+        }
+
+        .selection-badge {
+            background: var(--primary);
+            color: white;
+            font-size: 12px;
+            font-weight: 700;
+            padding: 2px 8px;
+            border-radius: 999px;
+        }
+
+        .selection-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .btn-pill {
+            background: rgba(255, 255, 255, 0.12);
+            border: none;
+            color: #e2e8f0;
+            padding: 7px 14px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.2s, color 0.2s;
+        }
+
+        .btn-pill:hover {
+            background: rgba(255, 255, 255, 0.22);
+            color: #ffffff;
+        }
+
+        .btn-generate-3d {
+            background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+            border: none;
+            color: #ffffff;
+            padding: 8px 20px;
+            border-radius: 999px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            box-shadow: 0 4px 12px rgba(139, 92, 246, 0.35);
+            transition: all 0.2s ease;
+        }
+
+        .btn-generate-3d:hover {
+            transform: scale(1.03);
+            box-shadow: 0 6px 16px rgba(139, 92, 246, 0.5);
+        }
+
+        /* ======================================================== */
+        /* CLEAN 3D WORKSPACE (v0.6.1)                              */
+        /* ======================================================== */
+        .studio-view {
+            max-width: 1200px;
+            margin: 0 auto;
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(8px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .studio-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+
+        .btn-studio-back {
+            background: #ffffff;
+            border: 1px solid var(--border-color);
+            padding: 8px 16px;
+            border-radius: var(--radius-md);
+            font-size: 13px;
+            font-weight: 600;
+            color: #334155;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.2s;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .btn-studio-back:hover {
+            background: #f1f5f9;
+            color: #0f172a;
+            transform: translateX(-2px);
+        }
+
+        .studio-title-wrap {
+            text-align: center;
+        }
+
+        .studio-title-wrap h2 {
+            font-size: 22px;
+            font-weight: 700;
+            color: #1e293b;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            justify-content: center;
+        }
+
+        .badge-studio-v {
+            background: #e0e7ff;
+            color: #4338ca;
+            font-size: 11px;
+            font-weight: 700;
+            padding: 2px 8px;
+            border-radius: 999px;
+            text-transform: uppercase;
+        }
+
+        .studio-title-wrap p {
+            font-size: 13px;
+            color: var(--text-muted);
+            margin-top: 2px;
+        }
+
+        .btn-download {
+            background: #10b981;
+            color: #ffffff;
+            border: none;
+            padding: 9px 18px;
+            border-radius: var(--radius-md);
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.2s;
+            box-shadow: 0 2px 6px rgba(16, 185, 129, 0.25);
+        }
+
+        .btn-download:hover:not(:disabled) {
+            background: #059669;
+            transform: translateY(-1px);
+        }
+
+        .btn-download:disabled {
+            background: #cbd5e1;
+            cursor: not-allowed;
+            box-shadow: none;
+        }
+
+        .studio-body {
+            display: grid;
+            grid-template-columns: 340px 1fr;
+            gap: 24px;
+        }
+
+        @media (max-width: 860px) {
+            .studio-body {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Sidebar */
+        .studio-sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .studio-card {
+            background: #ffffff;
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg);
+            padding: 18px;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .status-indicator-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 12px;
+        }
+
+        .status-pulse-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #3b82f6;
+            box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.7);
+            animation: pulseDot 1.5s infinite;
+        }
+
+        @keyframes pulseDot {
+            0% {
+                box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.7);
+            }
+
+            70% {
+                box-shadow: 0 0 0 8px rgba(59, 130, 246, 0);
+            }
+
+            100% {
+                box-shadow: 0 0 0 0 rgba(59, 130, 246, 0);
+            }
+        }
+
+        .status-pulse-dot.done {
+            background: #10b981;
+            animation: none;
+            box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.2);
+        }
+
+        .status-pulse-dot.err {
+            background: #ef4444;
+            animation: none;
+        }
+
+        .status-text {
+            font-size: 14px;
+            font-weight: 600;
+            color: #1e293b;
+            flex: 1;
+        }
+
+        .status-percent {
+            font-size: 14px;
+            font-weight: 700;
+            color: var(--primary);
+        }
+
+        .progress-bar-track {
+            width: 100%;
+            height: 8px;
+            background: #e2e8f0;
+            border-radius: 999px;
+            overflow: hidden;
+            margin-bottom: 12px;
+        }
+
+        .progress-bar-fill {
+            height: 100%;
+            width: 5%;
+            background: linear-gradient(90deg, #3b82f6, #8b5cf6);
+            border-radius: 999px;
+            transition: width 0.4s ease;
+        }
+
+        .pipeline-badge-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .pipeline-badge {
+            font-size: 11px;
+            color: #475569;
+            background: #f1f5f9;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-weight: 500;
+        }
+
+        .studio-card-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: #334155;
+            margin-bottom: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .log-live-tag {
+            background: #fee2e2;
+            color: #dc2626;
+            font-size: 10px;
+            font-weight: 700;
+            padding: 1px 6px;
+            border-radius: 4px;
+        }
+
+        .source-thumbnails-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 8px;
+            max-height: 160px;
+            overflow-y: auto;
+        }
+
+        .source-thumb {
+            width: 100%;
+            aspect-ratio: 1;
+            object-fit: contain;
+            background: #f8fafc;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 2px;
+        }
+
+        .studio-terminal {
+            background: #0f172a;
+            color: #38bdf8;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            line-height: 1.6;
+            padding: 12px;
+            border-radius: 6px;
+            height: 180px;
+            overflow-y: auto;
+        }
+
+        .log-entry {
+            margin-bottom: 4px;
+            word-break: break-all;
+        }
+
+        /* Right Viewport */
+        .studio-viewport-wrap {
+            background: radial-gradient(circle at 50% 50%, #1e293b 0%, #090d16 100%);
+            border-radius: var(--radius-lg);
+            border: 1px solid #334155;
+            min-height: 520px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+            box-shadow: 0 16px 36px rgba(0, 0, 0, 0.25);
+        }
+
+        /* 3D Wireframe Cube Loader */
+        .viewport-loader {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            padding: 40px;
+        }
+
+        .cube-scene {
+            width: 80px;
+            height: 80px;
+            perspective: 400px;
+            margin-bottom: 24px;
+        }
+
+        .cube-spinner {
+            width: 100%;
+            height: 100%;
+            position: relative;
+            transform-style: preserve-3d;
+            animation: spinCube 4s infinite linear;
+        }
+
+        @keyframes spinCube {
+            0% {
+                transform: rotateX(0deg) rotateY(0deg);
+            }
+
+            100% {
+                transform: rotateX(360deg) rotateY(360deg);
+            }
+        }
+
+        .cube-face {
+            position: absolute;
+            width: 80px;
+            height: 80px;
+            border: 2px solid #38bdf8;
+            background: rgba(56, 189, 248, 0.08);
+            box-shadow: 0 0 12px rgba(56, 189, 248, 0.2);
+        }
+
+        .cube-front {
+            transform: rotateY(0deg) translateZ(40px);
+        }
+
+        .cube-back {
+            transform: rotateY(180deg) translateZ(40px);
+        }
+
+        .cube-right {
+            transform: rotateY(90deg) translateZ(40px);
+        }
+
+        .cube-left {
+            transform: rotateY(-90deg) translateZ(40px);
+        }
+
+        .cube-top {
+            transform: rotateX(90deg) translateZ(40px);
+        }
+
+        .cube-bottom {
+            transform: rotateX(-90deg) translateZ(40px);
+        }
+
+        .loader-title {
+            color: #ffffff;
+            font-size: 17px;
+            font-weight: 600;
+            margin-bottom: 6px;
+        }
+
+        .loader-sub {
+            color: #94a3b8;
+            font-size: 13px;
+            max-width: 340px;
+        }
+
+        /* Google Model Viewer */
+        .model-viewer-element {
+            width: 100%;
+            height: 520px;
+            background: transparent;
+            outline: none;
+        }
+
+        .viewport-controls {
+            position: absolute;
+            bottom: 16px;
+            right: 16px;
+            display: flex;
+            gap: 8px;
+            z-index: 10;
+        }
+
+        .ctrl-btn {
+            background: rgba(15, 23, 42, 0.75);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            color: #f1f5f9;
+            padding: 8px 14px;
+            border-radius: var(--radius-md);
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.2s;
+        }
+
+        .ctrl-btn:hover {
+            background: rgba(15, 23, 42, 0.95);
+            border-color: var(--primary);
+            color: #ffffff;
+        }
     </style>
 </head>
 
 <body>
-    <div class="header">
-        <h1>Product Image Finder</h1>
-        <p>Find multi-angle images for any product using iterative anchor expansion and visual verification</p>
-    </div>
+    <!-- SEARCH & DISCOVERY VIEW -->
+    <div id="search-view">
+        <div class="header">
+            <div>
+                <h1>Product Image Finder</h1>
+                <p>Find multi-angle images for any product and generate interactive 3D models</p>
+            </div>
+            <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle dark mode">Dark mode</button>
+        </div>
 
-    <div class="main-card">
-        <div class="row">
-            <div class="col">
-                <div class="tabs">
-                    <button class="tab-btn active" id="tab-file" type="button">File Upload</button>
-                    <button class="tab-btn" id="tab-url" type="button">Image URL</button>
-                </div>
+        <div class="main-card">
+            <div class="row">
+                <div class="col">
+                    <div class="tabs">
+                        <button class="tab-btn active" id="tab-file" type="button">File Upload</button>
+                        <button class="tab-btn" id="tab-url" type="button">Image URL</button>
+                    </div>
 
-                <!-- File Upload Tab -->
-                <div id="panel-file">
-                    <div class="dropzone" id="dropzone">
-                        <input type="file" id="img" accept="image/*">
-                        <div id="dropzone-prompt">
-                            <div class="upload-icon">
-                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                    stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                                    <polyline points="17 8 12 3 7 8"></polyline>
-                                    <line x1="12" y1="3" x2="12" y2="15"></line>
-                                </svg>
+                    <!-- File Upload Tab -->
+                    <div id="panel-file">
+                        <div class="dropzone" id="dropzone">
+                            <input type="file" id="img" accept="image/*">
+                            <div id="dropzone-prompt">
+                                <div class="upload-icon">
+                                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                        <polyline points="17 8 12 3 7 8"></polyline>
+                                        <line x1="12" y1="3" x2="12" y2="15"></line>
+                                    </svg>
+                                </div>
+                                <div class="upload-title">Click to upload or drag & drop</div>
+                                <div class="upload-subtitle">PNG, JPG, WEBP (or paste with Ctrl+V)</div>
                             </div>
-                            <div class="upload-title">Click to upload or drag & drop</div>
-                            <div class="upload-subtitle">PNG, JPG, WEBP (or paste with Ctrl+V)</div>
-                        </div>
 
-                        <div class="preview-container" id="file-preview-wrap">
-                            <img id="prev" class="preview-img" alt="Uploaded Preview">
+                            <div class="preview-container" id="file-preview-wrap">
+                                <img id="prev" class="preview-img" alt="Uploaded Preview">
+                                <div class="file-info">
+                                    <span id="file-name"></span>
+                                    <button type="button" class="btn-remove" id="btn-remove-file">Remove</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- URL Tab -->
+                    <div id="panel-url" class="url-box">
+                        <div class="form-group">
+                            <label for="img-url">Direct Image URL</label>
+                            <input type="text" id="img-url" placeholder="https://example.com/product.jpg">
+                        </div>
+                        <div class="preview-container" id="url-preview-wrap" style="margin-top: 10px;">
+                            <img id="url-prev" class="preview-img" alt="URL Preview">
                             <div class="file-info">
-                                <span id="file-name"></span>
-                                <button type="button" class="btn-remove" id="btn-remove-file">Remove</button>
+                                <span>Image loaded</span>
+                                <button type="button" class="btn-remove" id="btn-remove-url">Remove</button>
                             </div>
                         </div>
                     </div>
                 </div>
 
-                <!-- URL Tab -->
-                <div id="panel-url" class="url-box">
+                <div class="col">
                     <div class="form-group">
-                        <label for="img-url">Direct Image URL</label>
-                        <input type="text" id="img-url" placeholder="https://example.com/product.jpg">
+                        <label for="prompt">Prompt (optional)</label>
+                        <input type="text" id="prompt" placeholder="e.g. red running shoe, side view">
                     </div>
-                    <div class="preview-container" id="url-preview-wrap" style="margin-top: 10px;">
-                        <img id="url-prev" class="preview-img" alt="URL Preview">
-                        <div class="file-info">
-                            <span>Image loaded</span>
-                            <button type="button" class="btn-remove" id="btn-remove-url">Remove</button>
-                        </div>
+                    <div class="form-group">
+                        <label for="pid">Product ID / Name (optional)</label>
+                        <input type="text" id="pid" placeholder="e.g. Nike Air Max 90">
                     </div>
+                    <div class="form-group">
+                        <label for="link">Product Link (optional)</label>
+                        <input type="text" id="link" placeholder="https://store.com/item...">
+                    </div>
+                    <div class="form-group">
+                        <label for="img-count">Target Image Count</label>
+                        <input type="number" id="img-count" value="20" min="1" max="30">
+                    </div>
+                    <button class="btn-submit" id="go" disabled>Find images</button>
                 </div>
             </div>
 
-            <div class="col">
-                <div class="form-group">
-                    <label for="prompt">Prompt (optional)</label>
-                    <input type="text" id="prompt" placeholder="e.g. red running shoe, side view">
-                </div>
-                <div class="form-group">
-                    <label for="pid">Product ID / Name (optional)</label>
-                    <input type="text" id="pid" placeholder="e.g. Nike Air Max 90">
-                </div>
-                <div class="form-group">
-                    <label for="link">Product Link (optional)</label>
-                    <input type="text" id="link" placeholder="https://store.com/item...">
-                </div>
-                <div class="form-group">
-                    <label for="img-count">Target Image Count</label>
-                    <input type="number" id="img-count" value="15" min="1" max="30">
-                </div>
-                <button class="btn-submit" id="go" disabled>Find images</button>
+            <div id="stats"></div>
+
+            <div id="grid-header" class="grid-header" style="display: none;">
+                <h3>Scraped Verified Results</h3>
+                <span class="grid-tip">💡 Click cards to select multi-angle views for 3D reconstruction</span>
+            </div>
+
+            <div id="grid"></div>
+        </div>
+    </div>
+
+    <!-- FLOATING SELECTION BAR -->
+    <div id="selection-bar" class="selection-bar">
+        <div class="selection-info">
+            <span class="selection-badge" id="selection-count">0</span>
+            <span>images selected</span>
+        </div>
+        <div class="selection-actions">
+            <button type="button" class="btn-pill" onclick="selectAllCards()">Select All</button>
+            <button type="button" class="btn-pill" onclick="clearSelectedCards()">Clear</button>
+            <button type="button" class="btn-generate-3d" id="btn-generate-3d" onclick="start3DGeneration()">
+                Generate 3D Model ✨
+            </button>
+        </div>
+    </div>
+
+    <!-- DEDICATED CLEAN 3D WORKSPACE (v0.6.1) -->
+    <div id="studio-view" class="studio-view" style="display: none;">
+        <div class="studio-header">
+            <button type="button" class="btn-studio-back" onclick="exitStudio()">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="19" y1="12" x2="5" y2="12"></line>
+                    <polyline points="12 19 5 12 12 5"></polyline>
+                </svg>
+                Back to Image Selection
+            </button>
+            <div class="studio-title-wrap">
+                <h2>3D Model Studio <span class="badge-studio-v">v0.6.1 Shape-First</span></h2>
+                <p id="studio-subtitle">Reconstructing shape & texture from multi-view product shots</p>
+            </div>
+            <div class="studio-actions">
+                <button type="button" class="btn-download" id="btn-download-glb" disabled onclick="downloadGlb()">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                        <polyline points="7 10 12 15 17 10"></polyline>
+                        <line x1="12" y1="15" x2="12" y2="3"></line>
+                    </svg>
+                    Download .glb
+                </button>
             </div>
         </div>
 
-        <div id="stats"></div>
-        <div id="grid"></div>
+        <div class="studio-body">
+            <!-- Left Sidebar -->
+            <div class="studio-sidebar">
+                <!-- Status & Progress -->
+                <div class="studio-card">
+                    <div class="status-indicator-row">
+                        <div class="status-pulse-dot" id="status-dot"></div>
+                        <span class="status-text" id="status-title">Queued...</span>
+                        <span class="status-percent" id="status-percent">0%</span>
+                    </div>
+                    <div class="progress-bar-track">
+                        <div class="progress-bar-fill" id="progress-fill" style="width: 5%;"></div>
+                    </div>
+                    <div class="pipeline-badge-row">
+                        <span class="pipeline-badge" id="pipeline-badge">Hunyuan3D-2mv local multiview</span>
+                    </div>
+                </div>
+
+                <!-- Source Images -->
+                <div class="studio-card">
+                    <div class="studio-card-title">
+                        <span>Source Views (<span id="source-img-count">0</span>)</span>
+                    </div>
+                    <div class="source-thumbnails-grid" id="source-thumbnails">
+                        <!-- Loaded dynamically -->
+                    </div>
+                </div>
+
+                <!-- Reconstruction Console Log -->
+                <div class="studio-card">
+                    <div class="studio-card-title">
+                        <span>Engine Output</span>
+                        <span class="log-live-tag">LIVE</span>
+                    </div>
+                    <div class="studio-terminal" id="studio-terminal">
+                        <div class="log-entry">[00:00:00] Initializing 3D engine...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right 3D Viewport -->
+            <div class="studio-viewport-wrap">
+                <!-- Generating Loading State -->
+                <div class="viewport-loader" id="viewport-loader">
+                    <div class="cube-scene">
+                        <div class="cube-spinner">
+                            <div class="cube-face cube-front"></div>
+                            <div class="cube-face cube-back"></div>
+                            <div class="cube-face cube-right"></div>
+                            <div class="cube-face cube-left"></div>
+                            <div class="cube-face cube-top"></div>
+                            <div class="cube-face cube-bottom"></div>
+                        </div>
+                    </div>
+                    <div class="loader-title">Generating 3D Model</div>
+                    <div class="loader-sub" id="loader-sub">Preparing selected views for Hunyuan3D-2mv...</div>
+                </div>
+
+                <!-- Google Model Viewer for GLB -->
+                <model-viewer id="model-viewer" class="model-viewer-element" src="" alt="Reconstructed 3D Product Model"
+                    auto-rotate rotation-per-second="25deg" camera-controls shadow-intensity="1.4" shadow-softness="0.5"
+                    exposure="1.0" touch-action="pan-y" style="display: none;">
+                </model-viewer>
+
+                <!-- Floating 3D Viewport Controls -->
+                <div class="viewport-controls" id="viewport-controls" style="display: none;">
+                    <button type="button" class="ctrl-btn" id="btn-toggle-rotate" title="Toggle Auto-Rotate"
+                        onclick="toggleAutoRotate()">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="23 4 23 10 17 10"></polyline>
+                            <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+                        </svg>
+                        Rotate
+                    </button>
+                    <button type="button" class="ctrl-btn" title="Reset Camera View" onclick="resetCameraView()">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path>
+                            <polyline points="21 3 21 8 16 8"></polyline>
+                            <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path>
+                            <polyline points="3 21 3 16 8 16"></polyline>
+                        </svg>
+                        Reset
+                    </button>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -468,6 +1235,19 @@
         let selectedFile = null;
         let selectedUrl = "";
         let activeTab = "file";
+        let currentResults = [];
+        let selectedUrls = new Set();
+        let currentJobId = null;
+        let pollInterval = null;
+
+        const themeToggle = $("theme-toggle");
+        function applyTheme(dark) {
+            document.body.classList.toggle("dark", dark);
+            themeToggle.textContent = dark ? "Light mode" : "Dark mode";
+            localStorage.setItem("yatzar-theme", dark ? "dark" : "light");
+        }
+        applyTheme(localStorage.getItem("yatzar-theme") === "dark");
+        themeToggle.onclick = () => applyTheme(!document.body.classList.contains("dark"));
 
         // Tab Switching
         $("tab-file").onclick = () => switchTab("file");
@@ -498,78 +1278,55 @@
         function handleFile(f) {
             if (!f || !f.type.startsWith("image/")) return;
             selectedFile = f;
-            $("prev").src = URL.createObjectURL(f);
-            $("file-name").textContent = `${f.name} (${(f.size / 1024).toFixed(1)} KB)`;
-            $("dropzone-prompt").style.display = "none";
-            $("file-preview-wrap").classList.add("active");
-            updateSubmitButton();
+            const r = new FileReader();
+            r.onload = e => {
+                $("prev").src = e.target.result;
+                $("file-name").textContent = f.name;
+                $("dropzone-prompt").style.display = "none";
+                $("file-preview-wrap").classList.add("active");
+                updateSubmitButton();
+            };
+            r.readAsDataURL(f);
         }
 
-        function clearFile() {
-            selectedFile = null;
-            $("img").value = "";
-            $("prev").src = "";
-            $("file-preview-wrap").classList.remove("active");
-            $("dropzone-prompt").style.display = "block";
-            updateSubmitButton();
-        }
+        $("img").onchange = e => handleFile(e.target.files[0]);
 
-        $("img").onchange = e => {
-            if (e.target.files && e.target.files[0]) {
-                handleFile(e.target.files[0]);
-            }
-        };
-
-        $("btn-remove-file").onclick = e => {
-            e.stopPropagation();
-            clearFile();
-        };
-
-        // Drag & Drop
         const dropzone = $("dropzone");
-        ['dragenter', 'dragover'].forEach(eventName => {
-            dropzone.addEventListener(eventName, e => {
-                e.preventDefault();
-                e.stopPropagation();
-                dropzone.classList.add('dragover');
-            }, false);
-        });
+        dropzone.ondragover = e => { e.preventDefault(); dropzone.classList.add("dragover"); };
+        dropzone.ondragleave = () => dropzone.classList.remove("dragover");
+        dropzone.ondrop = e => {
+            e.preventDefault();
+            dropzone.classList.remove("dragover");
+            handleFile(e.dataTransfer.files[0]);
+        };
 
-        ['dragleave', 'drop'].forEach(eventName => {
-            dropzone.addEventListener(eventName, e => {
-                e.preventDefault();
-                e.stopPropagation();
-                dropzone.classList.remove('dragover');
-            }, false);
-        });
-
-        dropzone.addEventListener('drop', e => {
-            const dt = e.dataTransfer;
-            const files = dt.files;
-            if (files && files.length > 0) {
-                handleFile(files[0]);
-            }
-        }, false);
-
-        // Clipboard Paste Support
-        window.addEventListener('paste', e => {
+        window.addEventListener("paste", e => {
+            if (activeTab !== "file") return;
             const items = (e.clipboardData || e.originalEvent.clipboardData).items;
             for (let item of items) {
-                if (item.kind === 'file' && item.type.startsWith('image/')) {
-                    const blob = item.getAsFile();
-                    switchTab("file");
-                    handleFile(blob);
+                if (item.kind === "file" && item.type.startsWith("image/")) {
+                    handleFile(item.getAsFile());
                     break;
                 }
             }
         });
 
-        // Image URL Input
+        $("btn-remove-file").onclick = e => {
+            e.stopPropagation();
+            selectedFile = null;
+            $("img").value = "";
+            $("prev").src = "";
+            $("dropzone-prompt").style.display = "flex";
+            $("file-preview-wrap").classList.remove("active");
+            updateSubmitButton();
+        };
+
+        // URL Handler
         $("img-url").oninput = e => {
-            const val = e.target.value.trim();
-            selectedUrl = val;
-            if (val) {
-                $("url-prev").src = val;
+            const u = e.target.value.trim();
+            selectedUrl = u;
+            if (u.match(/^https?:\/\/.+/i)) {
+                $("url-prev").src = u;
                 $("url-preview-wrap").classList.add("active");
             } else {
                 $("url-preview-wrap").classList.remove("active");
@@ -577,15 +1334,9 @@
             updateSubmitButton();
         };
 
-        $("url-prev").onerror = () => {
-            if (selectedUrl) {
-                $("url-preview-wrap").classList.remove("active");
-            }
-        };
-
         $("btn-remove-url").onclick = () => {
-            $("img-url").value = "";
             selectedUrl = "";
+            $("img-url").value = "";
             $("url-prev").src = "";
             $("url-preview-wrap").classList.remove("active");
             updateSubmitButton();
@@ -605,13 +1356,16 @@
             fd.append("prompt", $("prompt").value);
             fd.append("product_id", $("pid").value);
             fd.append("link", $("link").value);
-            fd.append("n", $("img-count").value || 15);
+                fd.append("n", $("img-count").value || 20);
 
             $("go").disabled = true;
             $("go").textContent = "Searching & Verifying...";
             $("grid").innerHTML = "";
             $("stats").className = "";
             $("stats").textContent = "";
+            $("grid-header").style.display = "none";
+            selectedUrls.clear();
+            updateSelectionBar();
 
             try {
                 const r = await fetch("/search", { method: "POST", body: fd });
@@ -631,19 +1385,36 @@
                     + `<b>${d.verified_total}</b> passed verification → <b>${d.results.length} selected diverse shots</b> in ${d.total}s `
                     + `<br><small style="color:#64748b">Timings: ${Object.entries(d.timings).map(([k, v]) => `${k}: ${v}s`).join(", ")}</small>`;
 
-                if (d.results.length === 0) {
+                currentResults = d.results || [];
+
+                if (currentResults.length === 0) {
                     $("grid").innerHTML = `<div style="grid-column: 1/-1; text-align: center; color: #64748b; padding: 24px;">No matching images passed verification. Try adding a prompt or product title hint.</div>`;
                 } else {
-                    $("grid").innerHTML = d.results.map(x => `
-                        <div class="card">
-                            <a href="${x.page || x.url}" target="_blank" rel="noopener noreferrer" title="Click to view source">
+                    $("grid-header").style.display = "flex";
+                    // Pre-select eight results by default for reliable COLMAP registration
+                    currentResults.slice(0, 8).forEach(x => selectedUrls.add(x.url));
+
+                    $("grid").innerHTML = currentResults.map((x, idx) => {
+                        const isSel = selectedUrls.has(x.url);
+                        return `
+                        <div class="card ${isSel ? 'selected' : ''}" id="card-${idx}" onclick="toggleCardSelection('${x.url}', ${idx})">
+                            <div class="card-select-btn" title="Select for 3D generation">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                            </div>
+                            <div class="img-wrap">
                                 <img src="${x.url}" referrerpolicy="no-referrer" alt="Product match" loading="lazy">
-                            </a>
+                            </div>
                             <div class="card-details">
                                 <span class="badge ${x.tier === 'high' ? 'anchor' : 'expanded'}">${x.tier === 'high' ? 'Anchor' : (x.tier === 'supplemental' ? 'Supplemental' : 'Angle')} ${(x.score * 100).toFixed(0)}%</span>
-                                <span class="badge">Col ${(x.color * 100).toFixed(0)}%</span>
+                                <span class="badge">${x.angle || 'view'}</span>
+                                <a href="${x.page || x.url}" target="_blank" rel="noopener noreferrer" class="link-src" onclick="event.stopPropagation()" title="View source listing">↗</a>
                             </div>
-                        </div>`).join("");
+                        </div>`;
+                    }).join("");
+
+                    updateSelectionBar();
                 }
             } catch (e) {
                 $("stats").className = "active";
@@ -654,6 +1425,210 @@
             $("go").textContent = "Find images";
             updateSubmitButton();
         };
+
+        // Selection Management
+        function toggleCardSelection(url, idx) {
+            const card = $(`card-${idx}`);
+            if (selectedUrls.has(url)) {
+                selectedUrls.delete(url);
+                if (card) card.classList.remove("selected");
+            } else {
+                selectedUrls.add(url);
+                if (card) card.classList.add("selected");
+            }
+            updateSelectionBar();
+        }
+
+        function selectAllCards() {
+            currentResults.forEach((x, idx) => {
+                selectedUrls.add(x.url);
+                const c = $(`card-${idx}`);
+                if (c) c.classList.add("selected");
+            });
+            updateSelectionBar();
+        }
+
+        function clearSelectedCards() {
+            selectedUrls.clear();
+            document.querySelectorAll(".card.selected").forEach(c => c.classList.remove("selected"));
+            updateSelectionBar();
+        }
+
+        function updateSelectionBar() {
+            const count = selectedUrls.size;
+            $("selection-count").textContent = count;
+            if (count > 0) {
+                $("selection-bar").classList.add("active");
+                $("btn-generate-3d").disabled = count < 8;
+                $("btn-generate-3d").title = count < 8 ? "Select at least 8 overlapping views" : "Generate 3D model";
+            } else {
+                $("selection-bar").classList.remove("active");
+            }
+        }
+
+        // ==========================================
+        // 3D STUDIO WORKSPACE LOGIC
+        // ==========================================
+        function openStudio() {
+            $("search-view").style.display = "none";
+            $("selection-bar").classList.remove("active");
+            $("studio-view").style.display = "block";
+            window.scrollTo({ top: 0, behavior: "smooth" });
+
+            // Render thumbnails of selected source images
+            $("source-img-count").textContent = selectedUrls.size;
+            $("source-thumbnails").innerHTML = Array.from(selectedUrls).map(u => `
+                <img src="${u}" referrerpolicy="no-referrer" class="source-thumb" alt="Source view">
+            `).join("");
+        }
+
+        function exitStudio() {
+            if (pollInterval) {
+                clearInterval(pollInterval);
+                pollInterval = null;
+            }
+            $("studio-view").style.display = "none";
+            $("search-view").style.display = "block";
+            updateSelectionBar();
+        }
+
+        async function start3DGeneration() {
+            if (selectedUrls.size < 8) {
+                alert("Please select at least 8 overlapping views of the exact same product.");
+                return;
+            }
+
+            openStudio();
+
+            // Reset studio viewport & UI state
+            $("viewport-loader").style.display = "flex";
+            $("model-viewer").style.display = "none";
+            $("viewport-controls").style.display = "none";
+            $("btn-download-glb").disabled = true;
+            $("status-dot").className = "status-pulse-dot";
+            $("status-title").textContent = "Submitting reconstruction job...";
+            $("status-percent").textContent = "5%";
+            $("progress-fill").style.width = "5%";
+            $("loader-sub").textContent = "Uploading multi-view shots to 3D pipeline...";
+            $("studio-terminal").innerHTML = `<div class="log-entry">[${new Date().toLocaleTimeString()}] Submitting ${selectedUrls.size} images to 3D pipeline...</div>`;
+
+            try {
+                const res = await fetch("/generate-3d", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        urls: Array.from(selectedUrls),
+                        prompt: $("prompt") ? $("prompt").value : "",
+                        product_id: $("pid") ? $("pid").value : ""
+                    })
+                });
+
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err.detail || "Failed to start 3D generation job.");
+                }
+
+                const data = await res.json();
+                currentJobId = data.job_id;
+                pollJobStatus(currentJobId);
+
+            } catch (err) {
+                $("status-dot").className = "status-pulse-dot err";
+                $("status-title").textContent = "Generation Failed";
+                $("loader-sub").textContent = err.message;
+                addLog(`Error: ${err.message}`);
+            }
+        }
+
+        function addLog(msg) {
+            const term = $("studio-terminal");
+            const div = document.createElement("div");
+            div.className = "log-entry";
+            div.textContent = msg;
+            term.appendChild(div);
+            term.scrollTop = term.scrollHeight;
+        }
+
+        function pollJobStatus(jobId) {
+            if (pollInterval) clearInterval(pollInterval);
+
+            pollInterval = setInterval(async () => {
+                try {
+                    const r = await fetch(`/generate-3d/${jobId}`);
+                    if (!r.ok) return;
+                    const job = await r.json();
+
+                    // Update Progress & Status
+                    $("status-title").textContent = job.step || "Processing...";
+                    $("status-percent").textContent = `${job.progress || 0}%`;
+                    $("progress-fill").style.width = `${job.progress || 5}%`;
+                    $("loader-sub").textContent = job.step || "Computing 3D geometry...";
+
+                    if (job.pipeline) {
+                        $("pipeline-badge").textContent = job.pipeline;
+                    }
+
+                    // Update Logs
+                    if (job.logs && job.logs.length) {
+                        $("studio-terminal").innerHTML = job.logs.map(l => `<div class="log-entry">${l}</div>`).join("");
+                        $("studio-terminal").scrollTop = $("studio-terminal").scrollHeight;
+                    }
+
+                    // Check Completion
+                    if (job.status === "done" && job.model_url) {
+                        clearInterval(pollInterval);
+                        pollInterval = null;
+
+                        $("status-dot").className = "status-pulse-dot done";
+                        $("status-title").textContent = "3D Reconstruction Ready!";
+                        $("status-percent").textContent = "100%";
+                        $("progress-fill").style.width = "100%";
+
+                        // Display in Google Model Viewer
+                        const mv = $("model-viewer");
+                        mv.src = job.model_url;
+                        mv.style.display = "block";
+                        $("viewport-loader").style.display = "none";
+                        $("viewport-controls").style.display = "flex";
+                        $("btn-download-glb").disabled = false;
+                        $("btn-download-glb").onclick = () => window.open(job.model_url, "_blank");
+
+                    } else if (job.status === "failed") {
+                        clearInterval(pollInterval);
+                        pollInterval = null;
+
+                        $("status-dot").className = "status-pulse-dot err";
+                        $("status-title").textContent = "Reconstruction Failed";
+                        $("loader-sub").textContent = job.error || "An error occurred during reconstruction.";
+                    }
+
+                } catch (e) {
+                    console.error("Polling error:", e);
+                }
+            }, 1000);
+        }
+
+        function toggleAutoRotate() {
+            const mv = $("model-viewer");
+            mv.autoRotate = !mv.autoRotate;
+            $("btn-toggle-rotate").style.color = mv.autoRotate ? "#38bdf8" : "#f1f5f9";
+        }
+
+        function resetCameraView() {
+            const mv = $("model-viewer");
+            mv.cameraOrbit = "45deg 55deg 2.5m";
+            mv.cameraTarget = "auto auto auto";
+        }
+
+        function downloadGlb() {
+            const mv = $("model-viewer");
+            if (mv && mv.src) {
+                const a = document.createElement("a");
+                a.href = mv.src;
+                a.download = `product_3d_model_${currentJobId || "model"}.glb`;
+                a.click();
+            }
+        }
     </script>
 </body>
 
