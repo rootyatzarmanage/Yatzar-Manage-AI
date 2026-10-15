@@ -8,7 +8,8 @@ import {
   getActiveResearchJobs,
   queueReconstruction,
   getReconstructionStatus,
-  cancelReconstruction
+  cancelReconstruction,
+  deleteProduct as deleteProductApi
 } from '../services/api';
 
 const ProductContext = createContext();
@@ -343,6 +344,68 @@ export const ProductProvider = ({ children }) => {
     setActiveProductId(newProduct.id);
     setCurrentStage(0);
   }, []);
+
+  /**
+   * Action: Complete Product and Asset Deletion.
+   * Completely purges the product from local state, localStorage,
+   * cancels research & reconstruction jobs, unlinks backend GLBs and caches,
+   * and gracefully activates the next product or initializes a clean one.
+   */
+  const deleteProductById = useCallback(async (targetId) => {
+    const idToDelete = targetId || activeIdRef.current;
+    if (!idToDelete) return { success: false, error: 'No product ID provided' };
+
+    const prodToDelete = productsRef.current.find(p => p.id === idToDelete);
+
+    // Optimistically update products list
+    const remainingProducts = productsRef.current.filter(p => p.id !== idToDelete);
+    let nextActiveId = activeIdRef.current;
+
+    if (activeIdRef.current === idToDelete) {
+      if (remainingProducts.length > 0) {
+        nextActiveId = remainingProducts[0].id;
+        setActiveProductId(nextActiveId);
+        setCurrentStage(remainingProducts[0].currentStage || 0);
+      } else {
+        const fresh = createCleanProduct();
+        remainingProducts.push(fresh);
+        nextActiveId = fresh.id;
+        setActiveProductId(fresh.id);
+        setCurrentStage(0);
+      }
+    }
+
+    setProducts(remainingProducts);
+
+    // Clean up local job state
+    setResearchJobs(prev => {
+      const next = { ...prev };
+      delete next[idToDelete];
+      return next;
+    });
+
+    setReconstructionJobs(prev => {
+      const next = { ...prev };
+      delete next[idToDelete];
+      return next;
+    });
+
+    // Call backend delete API to purge cache, jobs, and disk GLB models
+    try {
+      const res = await deleteProductApi(idToDelete, {
+        modelNumber: prodToDelete?.modelNumber,
+        modelUrl: prodToDelete?.modelUrl,
+        modelPath: prodToDelete?.modelPath
+      });
+
+      addNotification(`Product "${prodToDelete?.name || idToDelete}" and all assets were deleted.`, 'info');
+      return res || { success: true };
+    } catch (err) {
+      console.warn('Backend product deletion notice:', err);
+      addNotification(`Product "${prodToDelete?.name || idToDelete}" was removed locally.`, 'info');
+      return { success: true, localOnly: true };
+    }
+  }, [addNotification]);
 
   /**
    * Explicit Start Research Action:
@@ -687,6 +750,8 @@ export const ProductProvider = ({ children }) => {
     setSearchQuery,
     selectProduct,
     createNewProduct,
+    deleteProduct: deleteProductById,
+    deleteProductById,
     updateActiveProduct,
     updateProductById,
     // Research Job Actions
@@ -714,6 +779,7 @@ export const ProductProvider = ({ children }) => {
     searchQuery,
     selectProduct,
     createNewProduct,
+    deleteProductById,
     updateActiveProduct,
     updateProductById,
     researchJobs,

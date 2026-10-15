@@ -196,6 +196,120 @@ reconstruct_queue_manager = ReconstructionQueueManager.get_instance()
 
 
 # ==========================================
+# PRODUCT ASSET MANAGEMENT & DELETION
+# ==========================================
+@app.route("/api/products/<product_id>", methods=["DELETE"])
+@app.route("/api/v1/products/<product_id>", methods=["DELETE"])
+def delete_product(product_id):
+    """
+    DELETE /api/products/<product_id>
+    Completely purges a product that has been processed and stored:
+    1. Removes from in-memory PRODUCTS_DB
+    2. Cancels and purges active research jobs and deletes persisted research cache
+    3. Cancels and purges queued reconstruction jobs
+    4. Deletes all generated 3D GLB models from cache/models matching product ID or SKU
+    """
+    try:
+        global PRODUCTS_DB
+        deleted_models = []
+        deleted_caches = []
+
+        product_meta = next((p for p in PRODUCTS_DB if p.get("id") == product_id or p.get("slug") == product_id), None)
+        PRODUCTS_DB = [p for p in PRODUCTS_DB if p.get("id") != product_id and p.get("slug") != product_id]
+
+        # Extract optional hints from request body or query parameters
+        req_hints = {}
+        if request.is_json and request.get_json(silent=True):
+            req_hints = request.get_json(silent=True) or {}
+        elif request.args:
+            req_hints = request.args.to_dict()
+
+        safe_id = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in str(product_id))
+
+        # 1. Cancel and purge Research Job
+        research_job_manager.cancel_research_job(product_id, reason="Product deleted by user")
+        with research_job_manager._jobs_lock:
+            job_id = research_job_manager._product_to_latest_job.pop(product_id, None)
+            if job_id and job_id in research_job_manager._jobs:
+                del research_job_manager._jobs[job_id]
+
+        # Purge persisted research JSON cache
+        from services.job_manager import JOBS_CACHE_DIR
+        cache_file = JOBS_CACHE_DIR / f"research_{safe_id}.json"
+        if cache_file.exists():
+            try:
+                cache_file.unlink()
+                deleted_caches.append(cache_file.name)
+            except Exception as e:
+                logger.warning(f"[DELETE PRODUCT] Could not remove research cache {cache_file}: {e}")
+
+        # 2. Cancel and purge Reconstruction Queue
+        reconstruct_queue_manager.cancel_reconstruction(product_id)
+        with reconstruct_queue_manager._queue_lock:
+            r_job_id = reconstruct_queue_manager._product_to_job.pop(product_id, None)
+            if r_job_id and r_job_id in reconstruct_queue_manager._jobs:
+                job_obj = reconstruct_queue_manager._jobs.pop(r_job_id, None)
+                if job_obj and job_obj in reconstruct_queue_manager._queue:
+                    reconstruct_queue_manager._queue.remove(job_obj)
+
+        # 3. Purge all generated 3D GLB model assets
+        patterns = [f"{safe_id}_*.glb"]
+        sku = (product_meta.get("modelNumber") if product_meta else None) or req_hints.get("modelNumber")
+        if sku:
+            safe_sku = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in str(sku))
+            patterns.append(f"{safe_sku}_*.glb")
+
+        for pattern in patterns:
+            for glb_file in MODELS_OUTPUT_DIR.glob(pattern):
+                try:
+                    if glb_file.is_file():
+                        glb_file.unlink()
+                        if glb_file.name not in deleted_models:
+                            deleted_models.append(glb_file.name)
+                            logger.info(f"[DELETE PRODUCT] Deleted model asset: {glb_file.name}")
+                except Exception as e:
+                    logger.warning(f"[DELETE PRODUCT] Could not remove model {glb_file}: {e}")
+
+        # Explicit modelUrl or modelPath purge
+        explicit_models = []
+        if product_meta:
+            if product_meta.get("modelUrl"):
+                explicit_models.append(product_meta.get("modelUrl"))
+            if product_meta.get("modelPath"):
+                explicit_models.append(product_meta.get("modelPath"))
+        if req_hints.get("modelUrl"):
+            explicit_models.append(req_hints.get("modelUrl"))
+        if req_hints.get("modelPath"):
+            explicit_models.append(req_hints.get("modelPath"))
+
+        for explicit_target in explicit_models:
+            if explicit_target:
+                p_name = Path(str(explicit_target)).name
+                direct_file = MODELS_OUTPUT_DIR / p_name
+                if direct_file.exists() and direct_file.is_file():
+                    try:
+                        direct_file.unlink()
+                        if direct_file.name not in deleted_models:
+                            deleted_models.append(direct_file.name)
+                            logger.info(f"[DELETE PRODUCT] Deleted explicit model asset: {direct_file.name}")
+                    except Exception as e:
+                        logger.warning(f"[DELETE PRODUCT] Could not remove explicit model {direct_file}: {e}")
+
+        return jsonify({
+            "success": True,
+            "product_id": product_id,
+            "deleted_models": deleted_models,
+            "deleted_caches": deleted_caches,
+            "message": f"Product '{product_id}' and all associated assets completely deleted."
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error in delete_product for {product_id}: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+
+# ==========================================
 # BACKGROUND RESEARCH JOB APIS (CONCURRENT)
 # ==========================================
 def _extract_research_payload_from_request() -> Dict[str, Any]:

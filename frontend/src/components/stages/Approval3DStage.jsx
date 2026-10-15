@@ -14,16 +14,19 @@ import {
   Clock, 
   FileText,
   AlertCircle,
-  Loader2
+  Loader2,
+  Trash2
 } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:5000';
 
 export default function Approval3DStage() {
-  const { activeProduct, updateActiveProduct, setCurrentStage } = useProducts();
+  const { activeProduct, updateActiveProduct, setCurrentStage, deleteProduct } = useProducts();
 
   const [validating, setValidating] = useState(false);
   const [validationResult, setValidationResult] = useState(activeProduct?.validationResult || null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     if (activeProduct?.modelUrl && !validationResult && !validating) {
@@ -54,6 +57,21 @@ export default function Approval3DStage() {
       updateActiveProduct({ validationResult: fallbackFail, status: 'FAILED' });
     } finally {
       setValidating(false);
+    }
+  };
+
+  const handleDeleteProduct = async () => {
+    if (!confirmDelete) {
+      setConfirmDelete(true);
+      setTimeout(() => setConfirmDelete(false), 5000);
+      return;
+    }
+    setDeleting(true);
+    try {
+      await deleteProduct(activeProduct?.id);
+    } catch (err) {
+      console.error('Delete product error:', err);
+      setDeleting(false);
     }
   };
 
@@ -208,13 +226,29 @@ export default function Approval3DStage() {
 
         {/* Footer Navigation */}
         <div className="flex items-center justify-between pt-4 mt-4 border-t border-[#E2E8F0] dark:border-[#1E2C52]">
-          <button
-            onClick={() => setCurrentStage(3)}
-            className="flex items-center gap-2 px-4 py-2 text-xs font-semibold text-[#64748B] dark:text-[#8D9CB8] bg-white dark:bg-[#131E3D] hover:bg-[#F1F5F9] dark:hover:bg-[#172449] border border-[#CBD5E1] dark:border-[#1E2C52] rounded-xl transition-colors"
-          >
-            <ArrowLeft className="w-3.5 h-3.5" />
-            <span>Back to 3D Generation</span>
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setCurrentStage(3)}
+              className="flex items-center gap-2 px-4 py-2 text-xs font-semibold text-[#64748B] dark:text-[#8D9CB8] bg-white dark:bg-[#131E3D] hover:bg-[#F1F5F9] dark:hover:bg-[#172449] border border-[#CBD5E1] dark:border-[#1E2C52] rounded-xl transition-colors"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+              <span>Back to 3D Generation</span>
+            </button>
+
+            <button
+              onClick={handleDeleteProduct}
+              disabled={deleting}
+              className={`flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl transition-all border ${
+                confirmDelete
+                  ? 'bg-rose-600 text-white border-rose-600 shadow-sm animate-pulse'
+                  : 'text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/30 hover:bg-rose-100 dark:hover:bg-rose-900/40 border-rose-200 dark:border-rose-900/50'
+              }`}
+              title="Completely delete this product and all stored assets"
+            >
+              {deleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+              <span>{confirmDelete ? "Click to Confirm Permanent Deletion" : "Delete Product & Assets"}</span>
+            </button>
+          </div>
 
           <div className="flex items-center gap-3">
             <button

@@ -385,3 +385,31 @@ export async function validate3D(data) {
     throw error;
   }
 }
+
+/**
+ * Completely purges a product and all its processed assets (GLB models, caches, jobs).
+ * @param {string} productId
+ * @param {object} metadata
+ */
+export async function deleteProduct(productId, metadata = {}) {
+  try {
+    const response = await fetch(`${API_BASE}/api/products/${encodeURIComponent(productId)}`, {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(metadata)
+    });
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.error || `Failed to delete product: ${response.statusText}`);
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('Delete product error:', error);
+    throw error;
+  }
+}
+

@@ -1,6 +1,6 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useProducts } from '../../context/ProductContext';
-import { Plus, CheckCircle, XCircle, Clock, Image as ImageIcon, Sparkles, Box } from 'lucide-react';
+import { Plus, CheckCircle, XCircle, Clock, Image as ImageIcon, Sparkles, Box, Trash2 } from 'lucide-react';
 
 export default function Sidebar() {
   const { 
@@ -8,10 +8,21 @@ export default function Sidebar() {
     activeProductId, 
     selectProduct, 
     createNewProduct,
+    deleteProduct,
     searchQuery,
     researchJobs = {},
     reconstructionJobs = {}
   } = useProducts();
+
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+
+  useEffect(() => {
+    if (!confirmDeleteId) return;
+    const timer = setTimeout(() => {
+      setConfirmDeleteId(null);
+    }, 4000);
+    return () => clearTimeout(timer);
+  }, [confirmDeleteId]);
 
   const filteredProducts = products.filter(p => {
     const q = searchQuery.toLowerCase();
@@ -79,7 +90,39 @@ export default function Sidebar() {
                     <h2 className="text-xs font-semibold text-[#1C2434] dark:text-white truncate" title={product.name || 'Untitled Product'}>
                       {product.name || 'Untitled Product'}
                     </h2>
+                    <button
+                      type="button"
+                      title={confirmDeleteId === product.id ? "Click again to permanently delete" : "Delete product and assets"}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (confirmDeleteId === product.id) {
+                          deleteProduct(product.id);
+                          setConfirmDeleteId(null);
+                        } else {
+                          setConfirmDeleteId(product.id);
+                        }
+                      }}
+                      className={`flex-shrink-0 p-1 rounded-lg transition-all ${
+                        confirmDeleteId === product.id
+                          ? 'bg-rose-500 text-white shadow-xs animate-pulse ring-2 ring-rose-400 opacity-100'
+                          : 'opacity-0 group-hover:opacity-100 text-[#94A3B8] hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40'
+                      }`}
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
                   </div>
+
+                  {confirmDeleteId === product.id && (
+                    <div className="mb-1.5 px-2 py-0.5 rounded text-[10px] font-semibold bg-rose-100 dark:bg-rose-950/70 text-rose-700 dark:text-rose-300 border border-rose-300 dark:border-rose-800 flex items-center justify-between">
+                      <span>Click trash to confirm</span>
+                      <span 
+                        onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(null); }}
+                        className="underline cursor-pointer hover:text-rose-900 dark:hover:text-rose-100"
+                      >
+                        Cancel
+                      </span>
+                    </div>
+                  )}
 
                   {/* Status Pill */}
                   <div className="flex items-center gap-2 mb-1.5 flex-wrap">
