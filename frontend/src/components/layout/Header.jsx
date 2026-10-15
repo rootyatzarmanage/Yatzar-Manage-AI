@@ -58,6 +58,8 @@ export default function Header() {
 
       {/* Right Controls */}
       <div className="flex items-center gap-3.5">
+        {/* Active Jobs Widget */}
+        <ActiveJobsWidget />
 
         {/* Dark/Light Mode Toggle */}
         <button
@@ -96,5 +98,101 @@ export default function Header() {
         </div>
       </div>
     </header>
+  );
+}
+
+function ActiveJobsWidget() {
+  const { researchJobs, reconstructionJobs, products, selectProduct } = useProducts();
+  const [isOpen, setIsOpen] = React.useState(false);
+
+  const activeResearch = Object.values(researchJobs || {}).filter(
+    j => j && (j.status === 'RUNNING' || j.status === 'QUEUED')
+  );
+  const activeReconstruct = Object.values(reconstructionJobs || {}).filter(
+    j => j && (j.status === 'RECONSTRUCTING' || j.status === 'QUEUED')
+  );
+
+  const totalActive = activeResearch.length + activeReconstruct.length;
+
+  if (totalActive === 0) return null;
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        className="flex items-center gap-2 px-3 py-1.5 text-xs font-semibold rounded-xl bg-brand-50 dark:bg-brand-500/20 text-brand-600 dark:text-brand-300 border border-brand-200 dark:border-brand-500/30 hover:bg-brand-100 transition-colors shadow-xs"
+      >
+        <div className="w-2 h-2 rounded-full bg-brand-500 animate-ping"></div>
+        <span>Active Jobs ({totalActive})</span>
+      </button>
+
+      {isOpen && (
+        <div className="absolute right-0 mt-2 w-72 bg-white dark:bg-[#0E172E] border border-[#CBD5E1] dark:border-[#1E2C52] rounded-2xl shadow-xl z-50 p-3 space-y-2">
+          <div className="flex items-center justify-between pb-2 border-b border-[#E2E8F0] dark:border-[#1E2C52]">
+            <span className="text-xs font-bold uppercase tracking-wider text-[#64748B] dark:text-[#8D9CB8]">
+              Background Jobs
+            </span>
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-brand-500/10 text-brand-500">
+              {totalActive} Running
+            </span>
+          </div>
+
+          <div className="space-y-1.5 max-h-60 overflow-y-auto">
+            {activeResearch.map(job => {
+              const prod = products.find(p => p.id === job.product_id);
+              const pName = prod?.name || job.product_id;
+              const pct = Math.round((job.progress || 0) * 100);
+
+              return (
+                <div
+                  key={job.product_id}
+                  onClick={() => {
+                    selectProduct(job.product_id);
+                    setIsOpen(false);
+                  }}
+                  className="p-2 rounded-xl bg-[#F8FAFC] dark:bg-[#131E3D] hover:bg-brand-50 dark:hover:bg-brand-500/10 cursor-pointer border border-[#E2E8F0] dark:border-[#1E2C52] transition-colors"
+                >
+                  <div className="flex items-center justify-between text-xs font-semibold text-[#1C2434] dark:text-white">
+                    <span className="truncate max-w-[140px]">{pName}</span>
+                    <span className="text-brand-600 dark:text-brand-400 font-bold">{pct}%</span>
+                  </div>
+                  <div className="flex items-center justify-between mt-1 text-[10px] text-[#64748B] dark:text-[#8D9CB8]">
+                    <span>Research • {job.status}</span>
+                    <span>{job.current_phase || 'Searching...'}</span>
+                  </div>
+                </div>
+              );
+            })}
+
+            {activeReconstruct.map(job => {
+              const prod = products.find(p => p.id === job.product_id);
+              const pName = prod?.name || job.product_id;
+
+              return (
+                <div
+                  key={job.product_id}
+                  onClick={() => {
+                    selectProduct(job.product_id);
+                    setIsOpen(false);
+                  }}
+                  className="p-2 rounded-xl bg-[#F8FAFC] dark:bg-[#131E3D] hover:bg-brand-50 dark:hover:bg-brand-500/10 cursor-pointer border border-[#E2E8F0] dark:border-[#1E2C52] transition-colors"
+                >
+                  <div className="flex items-center justify-between text-xs font-semibold text-[#1C2434] dark:text-white">
+                    <span className="truncate max-w-[140px]">{pName}</span>
+                    <span className="text-amber-500 font-bold">
+                      {job.status === 'RECONSTRUCTING' ? 'GPU ACTIVE' : `QUEUED (#${job.queue_position || 1})`}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between mt-1 text-[10px] text-[#64748B] dark:text-[#8D9CB8]">
+                    <span>Pixal3D 3D Engine</span>
+                    <span>{job.status}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

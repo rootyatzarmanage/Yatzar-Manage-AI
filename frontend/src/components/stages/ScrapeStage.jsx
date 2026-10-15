@@ -13,28 +13,51 @@ import {
   Clock, 
   Check, 
   Image as ImageIcon,
-  ExternalLink
+  ExternalLink,
+  Loader2,
+  AlertTriangle,
+  RotateCcw,
+  Ban
 } from 'lucide-react';
 
 export default function ScrapeStage() {
-  const { activeProduct, updateActiveProduct, setCurrentStage, isProcessing } = useProducts();
+  const { 
+    activeProduct, 
+    updateActiveProduct, 
+    setCurrentStage, 
+    activeResearchJob, 
+    cancelResearch, 
+    retryResearch 
+  } = useProducts();
 
-  const [images, setImages] = useState(activeProduct?.scrapedImages || []);
-  const [urls, setUrls] = useState(activeProduct?.relatedUrls || []);
+  const curatedImages = React.useMemo(() => {
+    return (activeProduct?.scrapedImages || []).map(img => ({
+      ...img,
+      is_rejected: false
+    }));
+  }, [activeProduct?.scrapedImages]);
+
+  const rejectedImages = React.useMemo(() => {
+    return (activeProduct?.rejectedImages || []).map(img => ({
+      ...img,
+      status: 'REJECTED',
+      is_rejected: true,
+      is_selected_reference: false,
+      selected: false
+    }));
+  }, [activeProduct?.rejectedImages]);
+
+  const urls = React.useMemo(() => activeProduct?.relatedUrls || [], [activeProduct?.relatedUrls]);
   const [activeFilter, setActiveFilter] = useState('all'); // 'all', 'verified', 'rejected'
 
-  useEffect(() => {
-    if (activeProduct) {
-      setImages(activeProduct.scrapedImages || []);
-      setUrls(activeProduct.relatedUrls || []);
-    }
-  }, [activeProduct?.id, activeProduct?.scrapedImages]);
-
   const handleProceedToApproval = () => {
-    // Select the best verified reference image if not already selected
+    // Only derive selected reference from eligible curated candidates
     let selectedRef = activeProduct?.best_reference;
-    if (!selectedRef && images.length > 0) {
-      selectedRef = images.find(i => i.is_selected_reference || i.status === 'VERIFIED') || images[0];
+    if (selectedRef && rejectedImages.some(rej => rej.url === selectedRef.url || rej.id === selectedRef.id)) {
+      selectedRef = null;
+    }
+    if (!selectedRef && curatedImages.length > 0) {
+      selectedRef = curatedImages.find(i => i.is_selected_reference || i.status === 'VERIFIED') || curatedImages[0];
     }
     
     updateActiveProduct({
@@ -45,19 +68,24 @@ export default function ScrapeStage() {
     setCurrentStage(2); // Go to Image Approval Stage
   };
 
-  const researchSummary = activeProduct?.researchSummary || {
-    total_retrieved: images.length || 0,
-    duplicates_removed: activeProduct?.duplicates_removed || 0,
-    rejected_as_irrelevant: images.filter(i => i.status === 'REJECTED').length || 0,
-    verified_count: images.filter(i => i.status === 'VERIFIED' || i.is_selected_reference).length || (images.length > 0 ? 1 : 0),
-    selected_reference: activeProduct?.best_reference ? 1 : (images.length > 0 ? 1 : 0)
+  const totalEvaluated = curatedImages.length + rejectedImages.length;
+  const researchSummary = {
+    total_retrieved: activeProduct?.researchSummary?.total_retrieved ?? totalEvaluated,
+    duplicates_removed: activeProduct?.researchSummary?.duplicates_removed ?? (activeProduct?.duplicates_removed || 0),
+    rejected_as_irrelevant: rejectedImages.length > 0 ? rejectedImages.length : (activeProduct?.researchSummary?.rejected_as_irrelevant ?? 0),
+    verified_count: curatedImages.length,
+    selected_reference: (activeProduct?.best_reference && curatedImages.length > 0) ? 1 : (curatedImages.length > 0 ? 1 : 0)
   };
 
-  const filteredImages = images.filter(img => {
-    if (activeFilter === 'verified') return img.status === 'VERIFIED' || img.is_selected_reference;
-    if (activeFilter === 'rejected') return img.status === 'REJECTED';
-    return true;
-  });
+  const filteredImages = React.useMemo(() => {
+    if (activeFilter === 'verified') return curatedImages;
+    if (activeFilter === 'rejected') return rejectedImages;
+    return [...curatedImages, ...rejectedImages];
+  }, [activeFilter, curatedImages, rejectedImages]);
+
+  const isRunning = activeResearchJob?.status === 'RUNNING' || activeResearchJob?.status === 'QUEUED';
+  const isFailed = activeResearchJob?.status === 'FAILED';
+  const isCancelled = activeResearchJob?.status === 'CANCELLED';
 
   return (
     <div className="max-w-6xl mx-auto p-4 md:p-6 space-y-5">
@@ -70,19 +98,36 @@ export default function ScrapeStage() {
                 Phase 2: Research
               </span>
               <h1 className="text-base font-bold text-[#1C2434] dark:text-white">
-                Automated Reference Discovery &amp; Verification
+                Autonomous Multi-Source Reference Discovery
               </h1>
             </div>
             <p className="text-xs text-[#64748B] dark:text-[#8D9CB8]">
-              Product-ID-first retrieval, DINOv2 visual deduplication, and seed-image cross-verification.
+              Decoupled background worker with DINOv2 visual deduplication and manufacturer identity corroboration.
             </p>
           </div>
 
           <div className="flex items-center gap-2 text-xs">
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/60 text-emerald-800 dark:text-emerald-300 font-semibold">
-              <Clock className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-              <span>{activeProduct?.executionTime ? `Completed in ${activeProduct.executionTime}` : 'Research Ready'}</span>
-            </div>
+            {isRunning ? (
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-brand-50 dark:bg-brand-950/40 border border-brand-200 dark:border-brand-800 text-brand-700 dark:text-brand-300 font-semibold">
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-brand-500" />
+                <span>Active Job ({activeResearchJob?.executionTime || '0s'})</span>
+              </div>
+            ) : isFailed ? (
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 font-semibold">
+                <AlertTriangle className="w-3.5 h-3.5 text-rose-500" />
+                <span>Job Failed</span>
+              </div>
+            ) : isCancelled ? (
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-semibold">
+                <Ban className="w-3.5 h-3.5 text-slate-500" />
+                <span>Job Cancelled</span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/60 text-emerald-800 dark:text-emerald-300 font-semibold">
+                <Clock className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                <span>{activeProduct?.executionTime ? `Completed in ${activeProduct.executionTime}` : 'Research Ready'}</span>
+              </div>
+            )}
           </div>
         </div>
 
@@ -115,6 +160,77 @@ export default function ScrapeStage() {
         </div>
       </div>
 
+      {/* 2B. Live Active Job / Running Banner */}
+      {isRunning && (
+        <div className="tailadmin-card p-6 bg-brand-50/40 dark:bg-brand-950/20 border-2 border-brand-500/30 shadow-sm space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-brand-500 text-white flex items-center justify-center shadow-md shadow-brand-500/20">
+                <Loader2 className="w-5 h-5 animate-spin" />
+              </div>
+              <div>
+                <h2 className="text-sm font-bold text-[#1C2434] dark:text-white">
+                  Research Running in Background
+                </h2>
+                <p className="text-xs text-[#64748B] dark:text-[#8D9CB8]">
+                  Current Phase: <strong className="text-brand-600 dark:text-brand-400">{activeResearchJob?.current_phase || 'Processing...'}</strong>
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <span className="font-mono text-xs font-semibold text-[#1C2434] dark:text-white">
+                Elapsed: {activeResearchJob?.executionTime || '0s'}
+              </span>
+              <button
+                onClick={() => cancelResearch(activeProduct?.id)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-rose-600 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 rounded-xl border border-rose-200 dark:border-rose-800 transition-colors"
+              >
+                <Ban className="w-3.5 h-3.5" />
+                <span>Cancel Job</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Progress Bar */}
+          <div className="w-full bg-[#E2E8F0] dark:bg-[#1E2C52] h-2 rounded-full overflow-hidden">
+            <div 
+              className="bg-brand-500 h-full rounded-full transition-all duration-300"
+              style={{ width: `${Math.round((activeResearchJob?.progress || 0.1) * 100)}%` }}
+            ></div>
+          </div>
+        </div>
+      )}
+
+      {/* 2C. Failed or Cancelled State Card */}
+      {(isFailed || isCancelled) && (
+        <div className={`tailadmin-card p-6 border ${isFailed ? 'bg-rose-50/20 border-rose-200 dark:border-rose-900/50' : 'bg-slate-50 dark:bg-slate-900/40 border-slate-200 dark:border-slate-800'} shadow-sm`}>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${isFailed ? 'bg-rose-100 text-rose-600' : 'bg-slate-200 text-slate-600'}`}>
+                {isFailed ? <AlertTriangle className="w-5 h-5" /> : <Ban className="w-5 h-5" />}
+              </div>
+              <div>
+                <h2 className="text-sm font-bold text-[#1C2434] dark:text-white">
+                  {isFailed ? 'Research Job Failed' : 'Research Job Cancelled'}
+                </h2>
+                <p className="text-xs text-[#64748B] dark:text-[#8D9CB8]">
+                  {activeResearchJob?.error || activeResearchJob?.cancel_reason || 'Job ended before completion.'}
+                </p>
+              </div>
+            </div>
+
+            <button
+              onClick={() => retryResearch(activeProduct?.id)}
+              className="flex items-center gap-2 px-5 py-2 text-xs font-semibold text-white bg-brand-500 hover:bg-brand-600 rounded-xl shadow-md shadow-brand-500/25 transition-all"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Retry Research</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* 3. Candidate Images Gallery */}
       <div className="tailadmin-card p-6 bg-white dark:bg-[#131E3D]">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 mb-5 border-b border-[#E2E8F0] dark:border-[#1E2C52]">
@@ -128,7 +244,7 @@ export default function ScrapeStage() {
                   : 'bg-[#F1F5F9] dark:bg-[#0F1832] text-[#64748B] dark:text-[#8D9CB8] hover:bg-[#E2E8F0] dark:hover:bg-[#172449]'
               }`}
             >
-              All Candidates ({images.length})
+              All Candidates ({curatedImages.length + rejectedImages.length})
             </button>
             <button
               onClick={() => setActiveFilter('verified')}
@@ -138,7 +254,7 @@ export default function ScrapeStage() {
                   : 'bg-[#F1F5F9] dark:bg-[#0F1832] text-[#64748B] dark:text-[#8D9CB8] hover:bg-[#E2E8F0] dark:hover:bg-[#172449]'
               }`}
             >
-              Verified ({images.filter(i => i.status === 'VERIFIED' || i.is_selected_reference).length})
+              Verified ({curatedImages.length})
             </button>
             <button
               onClick={() => setActiveFilter('rejected')}
@@ -148,7 +264,7 @@ export default function ScrapeStage() {
                   : 'bg-[#F1F5F9] dark:bg-[#0F1832] text-[#64748B] dark:text-[#8D9CB8] hover:bg-[#E2E8F0] dark:hover:bg-[#172449]'
               }`}
             >
-              Rejected ({images.filter(i => i.status === 'REJECTED').length})
+              Rejected ({rejectedImages.length})
             </button>
           </div>
 
@@ -157,20 +273,39 @@ export default function ScrapeStage() {
           </span>
         </div>
 
-        {/* Grid of Clean Candidates */}
+        {/* Informative banner if 0 curated images survived */}
+        {!isRunning && curatedImages.length === 0 && rejectedImages.length > 0 && (
+          <div className="mb-5 p-4 rounded-xl border border-amber-200 dark:border-amber-900/50 bg-amber-50/50 dark:bg-amber-950/20 text-xs text-amber-800 dark:text-amber-300 flex items-start gap-3">
+            <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 mt-0.5 flex-shrink-0" />
+            <div>
+              <span className="font-bold">No candidates passed visual verification and model identity matching.</span>
+              <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-0.5">
+                All {rejectedImages.length} candidates were rejected by evidence thresholds. Rejected candidates are displayed below with rejection reasons and cannot be selected for 3D reconstruction.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Grid of Candidates */}
         {filteredImages.length === 0 ? (
           <div className="p-8 text-center border-2 border-dashed border-[#CBD5E1] dark:border-[#1E2C52] rounded-2xl mb-6 bg-[#F8FAFC]/50 dark:bg-[#0F1832]/40">
             <ImageIcon className="w-8 h-8 text-[#94A3B8] mx-auto mb-2" />
             <p className="text-xs font-semibold text-[#1C2434] dark:text-white">
-              No candidate images match this filter.
+              {isRunning
+                ? 'Discovering candidates in background...'
+                : activeFilter === 'verified' && curatedImages.length === 0
+                ? 'No candidates passed visual verification and model identity matching. Check the Rejected tab to view evaluated candidates.'
+                : activeFilter === 'rejected' && rejectedImages.length === 0
+                ? 'No candidates were rejected.'
+                : 'No candidate images match this filter.'}
             </p>
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
             {filteredImages.map((img, idx) => {
-              const isSelectedRef = img.is_selected_reference || (idx === 0 && img.status !== 'REJECTED');
-              const isVerified = img.status === 'VERIFIED' || isSelectedRef;
-              const isRejected = img.status === 'REJECTED';
+              const isRejected = img.is_rejected || img.status === 'REJECTED';
+              const isSelectedRef = !isRejected && (img.is_selected_reference || (activeProduct?.best_reference && (activeProduct.best_reference.id === img.id || activeProduct.best_reference.url === img.url)));
+              const isVerified = !isRejected && (img.status === 'VERIFIED' || isSelectedRef);
 
               return (
                 <div
@@ -179,7 +314,7 @@ export default function ScrapeStage() {
                     isSelectedRef
                       ? 'border-brand-500 bg-brand-50/20 dark:bg-brand-500/10 ring-2 ring-brand-500/20'
                       : isRejected
-                      ? 'border-rose-200 dark:border-rose-900/40 bg-rose-50/10 dark:bg-rose-950/20 opacity-70'
+                      ? 'border-rose-200 dark:border-rose-900/40 bg-rose-50/10 dark:bg-rose-950/20 opacity-80'
                       : 'border-[#E2E8F0] dark:border-[#1E2C52] bg-white dark:bg-[#0F1832]/60'
                   }`}
                 >
@@ -231,11 +366,19 @@ export default function ScrapeStage() {
                       {img.source || 'Discovered via web retrieval'}
                     </p>
 
-                    {/* Verification Reason */}
-                    {img.rejection_reason && (
-                      <p className="text-[10px] text-rose-600 dark:text-rose-400 mt-1">
-                        Reason: {img.rejection_reason}
-                      </p>
+                    {/* Non-Selectable Warning and Rejection Reason for Rejected candidates */}
+                    {isRejected && (
+                      <div className="mt-2 pt-2 border-t border-rose-200/50 dark:border-rose-900/30">
+                        <div className="flex items-center gap-1 text-[10px] font-semibold text-rose-600 dark:text-rose-400">
+                          <Ban className="w-3 h-3 flex-shrink-0" />
+                          <span>Non-selectable (Rejected by Research)</span>
+                        </div>
+                        {img.rejection_reason && (
+                          <p className="text-[10px] text-rose-500 dark:text-rose-400 mt-0.5">
+                            Reason: {img.rejection_reason}
+                          </p>
+                        )}
+                      </div>
                     )}
                   </div>
                 </div>
@@ -286,7 +429,8 @@ export default function ScrapeStage() {
 
           <button
             onClick={handleProceedToApproval}
-            className="flex items-center gap-2 px-6 py-2.5 text-xs font-semibold text-white bg-brand-500 hover:bg-brand-600 rounded-xl shadow-md shadow-brand-500/25 transition-all hover:scale-[1.01] active:scale-[0.99]"
+            disabled={curatedImages.length === 0 || isRunning}
+            className="flex items-center gap-2 px-6 py-2.5 text-xs font-semibold text-white bg-brand-500 hover:bg-brand-600 disabled:bg-slate-400 dark:disabled:bg-slate-700 disabled:cursor-not-allowed rounded-xl shadow-md shadow-brand-500/25 transition-all hover:scale-[1.01] active:scale-[0.99]"
           >
             <span>Proceed to Image Approval</span>
             <ArrowRight className="w-3.5 h-3.5" />

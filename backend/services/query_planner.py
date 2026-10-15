@@ -136,8 +136,9 @@ class QueryPlanner:
             expected_info: str,
             angle_tag: str = "Isometric Angle"
         ):
-            # Sanitize against internal DB ID leakage
-            sanitized = sanitize_query_against_internal_leakage(q_str, [internal_id])
+            # Sanitize against internal DB ID leakage, preserving verified manufacturer identifier
+            preserved = [model] if model else []
+            sanitized = sanitize_query_against_internal_leakage(q_str, [internal_id], preserved_tokens=preserved)
             if not sanitized:
                 return
             clean = sanitized.strip()

@@ -2,7 +2,7 @@ import React, { useRef, useState, useEffect } from 'react';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { Box, RotateCw, Eye, Sparkles } from 'lucide-react';
+import { Box, RotateCw, Eye, Sparkles, Flashlight } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:5000';
 
@@ -18,11 +18,15 @@ export default function ThreeCADViewer({
   const cameraRef = useRef(null);
   const controlsRef = useRef(null);
   const currentModelRef = useRef(null);
+  const throwLightRef = useRef(null);
+  const throwFillRef = useRef(null);
 
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState(null);
   const [autoRotate, setAutoRotate] = useState(true);
   const [wireframe, setWireframe] = useState(false);
+  const [throwLight, setThrowLight] = useState(false);
+  const [throwIntensity, setThrowIntensity] = useState(1.8);
 
   // Initialize Scene & Renderer
   useEffect(() => {
@@ -74,6 +78,20 @@ export default function ThreeCADViewer({
     rimLight.position.set(0, -5, 3);
     scene.add(rimLight);
 
+    // Dedicated Throw Light Inspection Rig (Camera-mounted neutral key + ambient fill)
+    // Specially tuned for inspecting dark/black products against dark viewport backgrounds
+    const throwKey = new THREE.DirectionalLight(0xffffff, 0);
+    throwKey.position.set(1.2, 1.8, 1.8);
+    throwKey.visible = false;
+    camera.add(throwKey);
+    scene.add(camera);
+    throwLightRef.current = throwKey;
+
+    const throwFill = new THREE.HemisphereLight(0xffffff, 0x1e293b, 0);
+    throwFill.visible = false;
+    scene.add(throwFill);
+    throwFillRef.current = throwFill;
+
     // High-tech Engineering Grid Floor
     const gridHelper = new THREE.GridHelper(8, 16, 0x3b82f6, 0x1e293b);
     gridHelper.position.y = -0.01;
@@ -117,6 +135,18 @@ export default function ThreeCADViewer({
     }
   }, [autoRotate]);
 
+  // Update Throw Light visibility and intensity dynamically
+  useEffect(() => {
+    if (throwLightRef.current) {
+      throwLightRef.current.visible = throwLight;
+      throwLightRef.current.intensity = throwLight ? throwIntensity * 1.8 : 0;
+    }
+    if (throwFillRef.current) {
+      throwFillRef.current.visible = throwLight;
+      throwFillRef.current.intensity = throwLight ? throwIntensity * 0.7 : 0;
+    }
+  }, [throwLight, throwIntensity]);
+
   // Load real GLB model
   useEffect(() => {
     if (!sceneRef.current) return;
@@ -134,7 +164,15 @@ export default function ThreeCADViewer({
     setLoading(true);
     setLoadError(null);
 
-    const fullUrl = modelUrl.startsWith('http') ? modelUrl : `${API_BASE}${modelUrl}`;
+    let cleanUrl = modelUrl;
+    if (typeof cleanUrl === 'string' && (cleanUrl.includes('\\') || cleanUrl.includes('models/'))) {
+      const filename = cleanUrl.split(/[\\/]/).pop();
+      cleanUrl = `/cache/models/${filename}`;
+    }
+    const fullUrl = cleanUrl.startsWith('http') 
+      ? cleanUrl 
+      : `${API_BASE}${cleanUrl.startsWith('/') ? '' : '/'}${cleanUrl}`;
+
     const loader = new GLTFLoader();
 
     loader.load(
@@ -256,6 +294,39 @@ export default function ThreeCADViewer({
 
       {/* Interactive Controls Overlay (Top Right) */}
       <div className="absolute top-3 right-3 flex items-center gap-2">
+        {/* Throw Light Inspection Rig */}
+        <button
+          onClick={() => setThrowLight(!throwLight)}
+          className={`px-2.5 py-1 rounded-xl text-xs font-semibold border backdrop-blur-md transition-all flex items-center gap-1.5 cursor-pointer ${
+            throwLight
+              ? 'bg-amber-500/25 text-amber-300 border-amber-500/50 shadow-sm'
+              : 'bg-slate-900/80 text-slate-300 border-slate-700/60'
+          }`}
+          title="Toggle Inspection Throw Light for dark/matte products"
+        >
+          <Flashlight className={`w-3.5 h-3.5 ${throwLight ? 'text-amber-400 fill-amber-400/30' : ''}`} />
+          <span>Throw Light {throwLight ? 'ON' : 'OFF'}</span>
+        </button>
+
+        {throwLight && (
+          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-semibold border border-amber-500/40 bg-slate-900/90 text-amber-300 backdrop-blur-md shadow-xs">
+            <span className="text-[10px] text-amber-400/80 uppercase tracking-wider font-mono">Intensity</span>
+            <input
+              type="range"
+              min="0.5"
+              max="3.5"
+              step="0.1"
+              value={throwIntensity}
+              onChange={(e) => setThrowIntensity(parseFloat(e.target.value))}
+              className="w-16 h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-amber-400"
+              title={`Throw Light Intensity: ${throwIntensity.toFixed(1)}x`}
+            />
+            <span className="text-[10px] font-mono text-amber-300 min-w-[28px] text-right">
+              {throwIntensity.toFixed(1)}x
+            </span>
+          </div>
+        )}
+
         <button
           onClick={() => setAutoRotate(!autoRotate)}
           className={`px-2.5 py-1 rounded-xl text-xs font-semibold border backdrop-blur-md transition-all flex items-center gap-1.5 ${

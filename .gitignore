@@ -8,16 +8,39 @@ venv/
 .venv/
 ENV/
 env/
+backend/venv/
 
 # Test/tool caches
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 
-# Yatzar runtime/generated data
+# Yatzar runtime/generated data & caches
 backend/cache/
-tools/triposr_poc/output/
+backend/scratch/
+scratch/
 output/
+
+# Deep Learning Model Weights & Large Checkpoints
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.bin
+*.onnx
+
+# 3D Mesh & Binary Asset Outputs
+*.glb
+*.gltf
+*.obj
+*.ply
+
+# Standalone Pixal3D runtime artifacts & renders
+standalone_pixal3d/renders/
+standalone_pixal3d/_stage*
+standalone_pixal3d/*.glb
+standalone_pixal3d/*.png
+reports/renders/
 
 # Node
 node_modules/
@@ -36,3 +59,5 @@ build/
 .idea/
 .DS_Store
 Thumbs.db
+*.lnk
+

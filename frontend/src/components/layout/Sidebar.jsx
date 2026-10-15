@@ -8,7 +8,9 @@ export default function Sidebar() {
     activeProductId, 
     selectProduct, 
     createNewProduct,
-    searchQuery 
+    searchQuery,
+    researchJobs = {},
+    reconstructionJobs = {}
   } = useProducts();
 
   const filteredProducts = products.filter(p => {
@@ -80,23 +82,41 @@ export default function Sidebar() {
                   </div>
 
                   {/* Status Pill */}
-                  <div className="flex items-center gap-2 mb-1.5">
-                    {product.status === 'APPROVED' && (
+                  <div className="flex items-center gap-2 mb-1.5 flex-wrap">
+                    {/* Active Research Job Status */}
+                    {researchJobs[product.id] && (researchJobs[product.id].status === 'RUNNING' || researchJobs[product.id].status === 'QUEUED') ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-brand-50 dark:bg-brand-950/50 text-brand-600 dark:text-brand-400 border border-brand-200 dark:border-brand-800">
+                        <Clock className="w-2.5 h-2.5 animate-spin" />
+                        {researchJobs[product.id].status === 'RUNNING'
+                          ? `RESEARCH ${Math.round((researchJobs[product.id].progress || 0) * 100)}%`
+                          : 'RESEARCH QUEUED'}
+                      </span>
+                    ) : reconstructionJobs[product.id] && (reconstructionJobs[product.id].status === 'RECONSTRUCTING' || reconstructionJobs[product.id].status === 'QUEUED') ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 dark:bg-amber-950/50 text-amber-600 dark:text-amber-400 border border-amber-200 dark:border-amber-800">
+                        <Sparkles className="w-2.5 h-2.5 animate-spin" />
+                        {reconstructionJobs[product.id].status === 'RECONSTRUCTING'
+                          ? '3D RECONSTRUCTING'
+                          : `3D QUEUED (#${reconstructionJobs[product.id].queue_position || 1})`}
+                      </span>
+                    ) : product.modelUrl ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800">
+                        <CheckCircle className="w-2.5 h-2.5" />
+                        3D READY
+                      </span>
+                    ) : product.status === 'APPROVED' ? (
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800">
                         <CheckCircle className="w-2.5 h-2.5" />
                         APPROVED
                       </span>
-                    )}
-                    {product.status === 'DROPPED' && (
+                    ) : product.status === 'DROPPED' ? (
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-50 dark:bg-rose-950/50 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-800">
                         <XCircle className="w-2.5 h-2.5" />
                         DROPPED
                       </span>
-                    )}
-                    {product.status === 'IN_PROGRESS' && (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-800">
-                        <Clock className="w-2.5 h-2.5 animate-spin" />
-                        IN PROGRESS
+                    ) : (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#F1F5F9] dark:bg-[#131E3D] text-[#64748B] dark:text-[#8D9CB8] border border-[#CBD5E1] dark:border-[#1E2C52]">
+                        <Clock className="w-2.5 h-2.5" />
+                        {product.status || 'DRAFT'}
                       </span>
                     )}
                   </div>

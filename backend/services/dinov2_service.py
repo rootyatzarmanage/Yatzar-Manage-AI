@@ -7,6 +7,7 @@ and 2D PCA coordinate projection for multi-view product reconstruction.
 import io
 import math
 import logging
+from pathlib import Path
 import requests
 from typing import Union, List, Dict, Tuple, Any, Optional
 import numpy as np
@@ -43,8 +44,16 @@ class DinoV2Engine:
 
         logger.info(f"Initializing DINOv2 ({model_name}) on device: {self.device}")
         
-        # Load pre-trained DINOv2 model from torch.hub (uses local torch cache)
-        self.model = torch.hub.load("facebookresearch/dinov2", model_name)
+        # Load pre-trained DINOv2 model from torch.hub (uses local torch cache with skip_validation)
+        try:
+            self.model = torch.hub.load("facebookresearch/dinov2", model_name, skip_validation=True)
+        except Exception as hub_err:
+            hub_dir = torch.hub.get_dir()
+            repo_dir = Path(hub_dir) / "facebookresearch_dinov2_main"
+            if repo_dir.exists():
+                self.model = torch.hub.load(str(repo_dir), model_name, source="local")
+            else:
+                raise hub_err
         self.model.to(self.device)
         self.model.eval()
 
@@ -124,6 +133,46 @@ class DinoV2Engine:
             cls_token = features_dict["x_norm_clstoken"][0]
             cls_token = F.normalize(cls_token, p=2, dim=-1)
         return cls_token.detach().cpu().numpy().flatten().astype(np.float32)
+
+    def extract_cls_tokens_batch(
+        self,
+        images: List[Union[str, bytes, Image.Image, np.ndarray, torch.Tensor]],
+        batch_size: int = 32
+    ) -> List[np.ndarray]:
+        """
+        Extracts L2-normalized 1D CLS token vectors for a batch of images in parallel
+        using a single batched tensor forward pass on GPU.
+        """
+        if not images:
+            return []
+
+        tensors = []
+        for img in images:
+            if isinstance(img, torch.Tensor):
+                t = img
+                if t.dim() == 3:
+                    t = t.unsqueeze(0)
+                if t.shape[-2:] != (224, 224):
+                    t = F.interpolate(t, size=(224, 224), mode="bicubic", align_corners=False)
+                tensors.append(t.squeeze(0))
+            else:
+                pil_img = self._load_image(img)
+                t = self.transform(pil_img)
+                tensors.append(t)
+
+        results: List[np.ndarray] = []
+        for i in range(0, len(tensors), batch_size):
+            chunk = tensors[i:i + batch_size]
+            batch_tensor = torch.stack(chunk, dim=0).to(self.device).float()
+            with torch.no_grad():
+                features_dict = self.model.forward_features(batch_tensor)
+                cls_tokens = features_dict["x_norm_clstoken"]  # Shape: (B, 384)
+                cls_tokens = F.normalize(cls_tokens, p=2, dim=-1)
+                np_tokens = cls_tokens.detach().cpu().numpy().astype(np.float32)
+                for row in np_tokens:
+                    results.append(row)
+
+        return results
 
     def extract_features(
         self,

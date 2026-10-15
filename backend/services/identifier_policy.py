@@ -17,15 +17,17 @@ from pydantic import BaseModel, Field
 UUID_PATTERN = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
-HEX_HASH_PATTERN = re.compile(r"^[0-9a-fA-F]{24,64}$")
+HEX_HASH_PATTERN = re.compile(r"^[0-9a-fA-F]{12,64}$")
 INTERNAL_PREFIX_PATTERN = re.compile(
     r"^(PROD|INTERNAL|ITEM|ASSET|DB|SYS|TEMP|DRAFT|RECORD|ID|OBJECT|KEY|ROW)[-_:]",
     re.IGNORECASE,
 )
 INTERNAL_SLUG_PATTERN = re.compile(
-    r"^(prod|internal|item|asset|db|sys|temp|draft|record|id)_[0-9a-zA-Z_]+$",
+    r"^(prod|internal|item|asset|db|sys|temp|draft|record|id|slug|custom|test|fixture|mock)[-_][0-9a-zA-Z_-]+$",
     re.IGNORECASE,
 )
+# Matches kebab-case phrase slugs of 3 or more lowercase words with no digits
+WORD_SLUG_PATTERN = re.compile(r"^[a-z]+(-[a-z]+){2,}$")
 # Matches small pure integers that look like autoincrement primary keys (1 to 5 digits)
 SMALL_INTEGER_PATTERN = re.compile(r"^\d{1,5}$")
 
@@ -178,7 +180,7 @@ def is_safe_manufacturer_identifier(token: Optional[str]) -> bool:
     if UUID_PATTERN.match(cleaned):
         return False
 
-    # Check hex hash patterns (24 to 64 hex characters)
+    # Check hex hash patterns (12 to 64 hex characters)
     if HEX_HASH_PATTERN.match(cleaned):
         return False
 
@@ -190,7 +192,11 @@ def is_safe_manufacturer_identifier(token: Optional[str]) -> bool:
     if INTERNAL_SLUG_PATTERN.match(cleaned):
         return False
 
-    # Reject tiny integers (1-3 digits) that look like autoincrement DB keys
+    # Check multi-word phrase slug pattern (e.g. "viewsonic-laser-projector")
+    if WORD_SLUG_PATTERN.match(cleaned):
+        return False
+
+    # Reject tiny integers (1-5 digits) that look like autoincrement DB keys
     if SMALL_INTEGER_PATTERN.match(cleaned):
         return False
 
@@ -228,27 +234,25 @@ def extract_verified_manufacturer_identifier(
     3. part_number (Highest confidence for industrial/mechanical/hardware goods, e.g. AL-HEX-9000)
     4. sku (Validated against manufacturer identifier rules)
 
-    NOTE: `product_id` is an internal identifier and is NEVER used as a manufacturer identifier.
+    NOTE: `product_id` is an internal identifier and is NEVER used by itself as a manufacturer identifier.
+    However, a valid manufacturer identifier is NOT rejected merely because product_id happens to equal it
+    (e.g. when an application intentionally uses the OEM SKU/model number as the product's primary key).
     """
     # 1. Article number check
     if article_number and is_safe_manufacturer_identifier(article_number):
-        if not product_id or article_number.strip().lower() != product_id.strip().lower():
-            return normalize_manufacturer_identifier(article_number)
+        return normalize_manufacturer_identifier(article_number)
 
     # 2. Model number check
     if model_number and is_safe_manufacturer_identifier(model_number):
-        if not product_id or model_number.strip().lower() != product_id.strip().lower():
-            return normalize_manufacturer_identifier(model_number)
+        return normalize_manufacturer_identifier(model_number)
 
     # 3. Part number check
     if part_number and is_safe_manufacturer_identifier(part_number):
-        if not product_id or part_number.strip().lower() != product_id.strip().lower():
-            return normalize_manufacturer_identifier(part_number)
+        return normalize_manufacturer_identifier(part_number)
 
-    # 4. SKU check (only if safe and not identical to internal product_id)
+    # 4. SKU check (only if safe manufacturer identifier)
     if sku and is_safe_manufacturer_identifier(sku):
-        if not product_id or sku.strip().lower() != product_id.strip().lower():
-            return normalize_manufacturer_identifier(sku)
+        return normalize_manufacturer_identifier(sku)
 
     return None
 
@@ -425,18 +429,27 @@ def normalize_product_identity(identity: ProductIdentity) -> CanonicalProductIde
 
 def sanitize_query_against_internal_leakage(
     query_str: str,
-    internal_ids: List[Optional[str]]
+    internal_ids: List[Optional[str]],
+    preserved_tokens: Optional[List[str]] = None
 ) -> str:
     """
     Ensures no internal ID or internal database token leaks into any generated query.
     If the entire query is an internal ID, returns empty string.
+    Tokens in `preserved_tokens` (e.g. verified manufacturer identifiers) are preserved.
     """
     cleaned = query_str.strip()
+    preserved_set = {
+        p.strip().lower() for p in (preserved_tokens or [])
+        if p and isinstance(p, str) and p.strip()
+    }
     for i_id in internal_ids:
         if not i_id or not isinstance(i_id, str):
             continue
         raw_id = i_id.strip()
         if not raw_id:
+            continue
+        # Never sanitize tokens that are verified manufacturer identifiers
+        if raw_id.lower() in preserved_set:
             continue
 
         # If query is exactly the quoted or unquoted internal ID

@@ -12,24 +12,47 @@ Verifies the 8 critical identity prioritization and category conflict rules:
 8. Identifier boundaries (e.g. 43218000 vs 432180001) strictly prevent substring false matches.
 """
 
+import os
+import sys
 import unittest
 import numpy as np
-from services.identifier_policy import (
-    ProductIdentity,
-    CanonicalProductIdentity,
-    normalize_product_identity,
-    is_exact_identifier_match,
-    extract_primary_category,
-    detect_category_conflict
-)
-from services.candidate_analyzer_service import (
-    CandidateAnalyzerService,
-    CandidateEvaluation,
-    ProductMatch,
-    CandidateType,
-    Viewpoint,
-    EvidenceValue
-)
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+try:
+    from services.identifier_policy import (
+        ProductIdentity,
+        CanonicalProductIdentity,
+        normalize_product_identity,
+        is_exact_identifier_match,
+        extract_primary_category,
+        detect_category_conflict
+    )
+    from services.candidate_analyzer_service import (
+        CandidateAnalyzerService,
+        CandidateEvaluation,
+        ProductMatch,
+        CandidateType,
+        Viewpoint,
+        EvidenceValue
+    )
+except ImportError:
+    from backend.services.identifier_policy import (
+        ProductIdentity,
+        CanonicalProductIdentity,
+        normalize_product_identity,
+        is_exact_identifier_match,
+        extract_primary_category,
+        detect_category_conflict
+    )
+    from backend.services.candidate_analyzer_service import (
+        CandidateAnalyzerService,
+        CandidateEvaluation,
+        ProductMatch,
+        CandidateType,
+        Viewpoint,
+        EvidenceValue
+    )
 
 
 class TestResearchCorrectness(unittest.TestCase):

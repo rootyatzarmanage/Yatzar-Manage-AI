@@ -1,0 +1,33 @@
+{
+  "model": "TripoSR",
+  "input_image": "E:\\SANJAY\\YatzarCreations\\Yatzar-Manage-AI\\backend\\cache\\candidates\\verified_2e4ddba90458.jpg",
+  "device": "cuda:0",
+  "gpu_model": "NVIDIA GeForce RTX 4060 Laptop GPU",
+  "timings": {
+    "model_load_sec": 20.98,
+    "preprocessing_sec": 63.69,
+    "neural_inference_sec": 5.615,
+    "marching_cubes_sec": 4.289,
+    "total_inference_wall_clock_sec": 73.59
+  },
+  "vram": {
+    "peak_vram_mb": 2378.54,
+    "peak_vram_gb": 2.32
+  },
+  "mesh_stats": {
+    "glb_path": "E:\\SANJAY\\YatzarCreations\\Yatzar-Manage-AI\\tools\\triposr_poc\\output\\triposr_viewsonic_ls800hd.glb",
+    "glb_size_kb": 2218.5,
+    "vertices": 56770,
+    "faces": 113536,
+    "watertight": true,
+    "winding_consistent": true,
+    "euler_characteristic": 2,
+    "connected_components": 1,
+    "extents": [
+      0.669,
+      1.002,
+      0.426
+    ]
+  },
+  "preview_path": "E:\\SANJAY\\YatzarCreations\\Yatzar-Manage-AI\\tools\\triposr_poc\\output\\previews\\triposr_projector_multiview_audit.png"
+}

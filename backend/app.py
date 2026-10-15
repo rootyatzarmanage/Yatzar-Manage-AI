@@ -9,6 +9,7 @@ import json
 import time
 import random
 import logging
+from typing import Dict, Any, List, Optional, Tuple, Union
 from pathlib import Path
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
@@ -22,7 +23,7 @@ from services.scraper_service import (
     scrape_images_playwright,
     CACHE_DIR
 )
-from services.reconstruction_service import ReconstructionService, MODELS_CACHE_DIR
+from services.reconstruction_service import ReconstructionService, MODELS_CACHE_DIR, MODELS_OUTPUT_DIR
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -47,8 +48,10 @@ def serve_uploads_cache(filename):
     return send_from_directory(str(UPLOAD_DIR), filename)
 
 @app.route("/cache/models/<path:filename>")
-def serve_models_cache(filename):
-    return send_from_directory(str(MODELS_CACHE_DIR), filename)
+@app.route("/models/<path:filename>")
+@app.route("/api/models/<path:filename>")
+def serve_models_output(filename):
+    return send_from_directory(str(MODELS_OUTPUT_DIR), filename)
 
 # Health check
 @app.route("/api/health", methods=["GET"])
@@ -185,154 +188,479 @@ def run_triage():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+from services.job_manager import ResearchJobManager, ReconstructionQueueManager, JobStatus, ReconstructionStatus
+
+# Initialize background job managers
+research_job_manager = ResearchJobManager.get_instance()
+reconstruct_queue_manager = ReconstructionQueueManager.get_instance()
+
+
 # ==========================================
-# STAGE 2: DINOv2 HARVEST & VECTOR SCRAPING (RETRIEVAL V2)
+# BACKGROUND RESEARCH JOB APIS (CONCURRENT)
 # ==========================================
+def _extract_research_payload_from_request() -> Dict[str, Any]:
+    """Helper to extract standard product metadata from multipart or JSON request."""
+    seed_image_input = None
+    product_title = ""
+    product_sku = ""
+    category = ""
+    product_id = ""
+    model_number = ""
+    article_number = ""
+    part_number = ""
+    brand = ""
+    user_prompt = ""
+    target_queries = []
+    dynamic_urls = []
+
+    # Handle multipart file upload
+    if request.files and "image" in request.files:
+        uploaded = request.files["image"]
+        if uploaded.filename:
+            dest = UPLOAD_DIR / f"seed_{int(time.time())}_{uploaded.filename}"
+            uploaded.save(str(dest))
+            seed_image_input = str(dest)
+
+    # Handle form data
+    if request.form:
+        product_title = request.form.get("product_title") or request.form.get("name") or product_title
+        model_number = request.form.get("model_number") or request.form.get("modelNumber") or ""
+        article_number = request.form.get("article_number") or request.form.get("articleNumber") or ""
+        part_number = request.form.get("part_number") or request.form.get("partNumber") or ""
+        product_sku = request.form.get("product_sku") or request.form.get("sku") or model_number or article_number or part_number or product_sku
+        brand = request.form.get("brand") or request.form.get("manufacturer") or ""
+        category = request.form.get("category") or category
+        product_id = request.form.get("product_id") or request.form.get("id") or product_id
+        user_prompt = request.form.get("prompt") or request.form.get("user_prompt") or ""
+        if not seed_image_input:
+            seed_image_input = request.form.get("seed_image") or request.form.get("thumbnail") or request.form.get("image")
+        q_str = request.form.get("target_queries")
+        if q_str:
+            try:
+                target_queries = json.loads(q_str) if q_str.startswith("[") else q_str.split("\n")
+            except Exception:
+                target_queries = [q_str]
+        url_str = request.form.get("sourceUrls") or request.form.get("dynamic_urls")
+        if url_str:
+            try:
+                dynamic_urls = json.loads(url_str) if url_str.startswith("[") else url_str.split("\n")
+            except Exception:
+                dynamic_urls = [url_str]
+
+    # Handle JSON body
+    if request.is_json and request.json:
+        data = request.json
+        product_title = data.get("product_title") or data.get("name") or product_title
+        model_number = data.get("model_number") or data.get("modelNumber") or model_number
+        article_number = data.get("article_number") or data.get("articleNumber") or article_number
+        part_number = data.get("part_number") or data.get("partNumber") or part_number
+        product_sku = data.get("product_sku") or data.get("sku") or model_number or article_number or part_number or product_sku
+        brand = data.get("brand") or data.get("manufacturer") or brand
+        category = data.get("category") or category
+        product_id = data.get("product_id") or data.get("id") or product_id
+        user_prompt = data.get("prompt") or data.get("user_prompt") or data.get("description") or user_prompt
+        if not seed_image_input:
+            seed_image_input = data.get("seed_image") or data.get("thumbnail") or data.get("image")
+        target_queries = data.get("target_queries") or target_queries
+        dynamic_urls = data.get("dynamic_urls") or data.get("sourceUrls") or []
+
+    # Handle base64 Data URL if passed in JSON/form
+    if isinstance(seed_image_input, str) and seed_image_input.startswith("data:image"):
+        import base64
+        header, data_part = seed_image_input.split(",", 1)
+        raw_data = base64.b64decode(data_part)
+        dest = UPLOAD_DIR / f"upload_b64_{int(time.time())}.jpg"
+        with open(dest, "wb") as f:
+            f.write(raw_data)
+        seed_image_input = str(dest)
+
+    if not seed_image_input:
+        seed_image_input = "https://images.unsplash.com/photo-1581291518857-4e27b48ff24e?w=600&auto=format&fit=crop&q=80"
+
+    p_id = product_id or f"PROD-{int(time.time())}"
+
+    return {
+        "id": p_id,
+        "product_id": p_id,
+        "name": product_title or "Custom Product",
+        "product_title": product_title or "Custom Product",
+        "modelNumber": model_number,
+        "model_number": model_number,
+        "articleNumber": article_number,
+        "article_number": article_number,
+        "partNumber": part_number,
+        "part_number": part_number,
+        "product_sku": product_sku,
+        "sku": product_sku,
+        "brand": brand,
+        "category": category,
+        "prompt": user_prompt,
+        "user_prompt": user_prompt,
+        "description": user_prompt,
+        "seed_image": seed_image_input,
+        "thumbnail": seed_image_input,
+        "target_queries": target_queries,
+        "sourceUrls": dynamic_urls,
+        "dynamic_urls": dynamic_urls
+    }
+
+
+@app.route("/api/research/start", methods=["POST"])
+@app.route("/api/v1/research/start", methods=["POST"])
+def start_research():
+    """
+    POST /api/research/start
+    Explicitly starts an independent background research job for a product.
+    If job already exists and is RUNNING/QUEUED, reattaches to it.
+    """
+    try:
+        payload = _extract_research_payload_from_request()
+        force_restart = bool(request.args.get("force", False) or (request.is_json and request.json.get("force_restart")))
+        job = research_job_manager.start_research_job(payload, force_restart=force_restart)
+        return jsonify({
+            "success": True,
+            "job": job.to_dict()
+        }), 202
+    except Exception as e:
+        logger.error(f"Error in /api/research/start: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/research/status/<product_or_job_id>", methods=["GET"])
+@app.route("/api/v1/research/status/<product_or_job_id>", methods=["GET"])
+def get_research_status(product_or_job_id):
+    """
+    GET /api/research/status/<product_or_job_id>
+    Returns live job status, progress percentage, current phase, and results if completed.
+    """
+    try:
+        job = research_job_manager.get_job_by_id_or_product(product_or_job_id)
+        if not job:
+            return jsonify({"success": False, "status": "NOT_FOUND", "message": f"No job found for {product_or_job_id}"}), 404
+
+        resp_data = {
+            "success": True,
+            "status": job.status,
+            "job": job.to_dict()
+        }
+        if job.status == JobStatus.COMPLETED.value and job.results:
+            resp_data["results"] = job.results
+
+        return jsonify(resp_data)
+    except Exception as e:
+        logger.error(f"Error in /api/research/status: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/research/results/<product_or_job_id>", methods=["GET"])
+@app.route("/api/v1/research/results/<product_or_job_id>", methods=["GET"])
+def get_research_results(product_or_job_id):
+    """
+    GET /api/research/results/<product_or_job_id>
+    Returns completed candidate pool, selected reference, and research summary.
+    """
+    try:
+        results = research_job_manager.get_job_results(product_or_job_id)
+        if not results:
+            job = research_job_manager.get_job_by_id_or_product(product_or_job_id)
+            if job:
+                return jsonify({"success": False, "status": job.status, "message": f"Job is {job.status}"}), 200
+            return jsonify({"success": False, "status": "NOT_FOUND", "error": "Job not found"}), 404
+        return jsonify(results)
+    except Exception as e:
+        logger.error(f"Error in /api/research/results: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/research/cancel/<product_or_job_id>", methods=["POST"])
+@app.route("/api/v1/research/cancel/<product_or_job_id>", methods=["POST"])
+def cancel_research(product_or_job_id):
+    """
+    POST /api/research/cancel/<product_or_job_id>
+    Explicitly cancels an individual running or queued research job.
+    """
+    try:
+        reason = (request.json or {}).get("reason", "Cancelled by user") if request.is_json else "Cancelled by user"
+        ok = research_job_manager.cancel_research_job(product_or_job_id, reason=reason)
+        job = research_job_manager.get_job_by_id_or_product(product_or_job_id)
+        return jsonify({
+            "success": ok,
+            "status": job.status if job else "NOT_FOUND",
+            "job": job.to_dict() if job else None
+        })
+    except Exception as e:
+        logger.error(f"Error in /api/research/cancel: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/research/retry/<product_or_job_id>", methods=["POST"])
+@app.route("/api/v1/research/retry/<product_or_job_id>", methods=["POST"])
+def retry_research(product_or_job_id):
+    """
+    POST /api/research/retry/<product_or_job_id>
+    Explicitly retries a failed or cancelled research job.
+    """
+    try:
+        new_job = research_job_manager.retry_research_job(product_or_job_id)
+        return jsonify({
+            "success": True,
+            "job": new_job.to_dict()
+        }), 202
+    except Exception as e:
+        logger.error(f"Error in /api/research/retry: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/research/jobs", methods=["GET"])
+@app.route("/api/v1/research/jobs", methods=["GET"])
+def list_research_jobs():
+    """
+    GET /api/research/jobs
+    Returns all active (RUNNING, QUEUED) and recent research jobs for global UI indicator.
+    """
+    try:
+        active = research_job_manager.list_active_jobs()
+        all_jobs = research_job_manager.list_all_jobs()
+        return jsonify({
+            "success": True,
+            "active_count": len(active),
+            "active_jobs": active,
+            "all_jobs": all_jobs
+        })
+    except Exception as e:
+        logger.error(f"Error in /api/research/jobs: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# Backward-compatible synchronous or pollable scrape route
 @app.route("/api/v1/scrape", methods=["POST"])
 @app.route("/api/scrape", methods=["POST"])
 def run_scrape():
     """
-    POST /api/v1/scrape
-    Ingests structured product metadata and executes the Retrieval V2 staged retrieval pipeline.
-    Returns verified cards with 2D PCA vector space coordinates, source provenance, and telemetry timings.
+    POST /api/v1/scrape (Backward Compatible & Job-Backed)
+    Starts or reattaches to background research job and returns job status or awaits results if requested.
     """
     try:
-        seed_image_input = None
-        product_title = ""
-        product_sku = ""
-        category = ""
-        product_id = ""
-        model_number = ""
-        article_number = ""
-        part_number = ""
-        brand = ""
-        user_prompt = ""
-        target_queries = []
-        dynamic_urls = []
+        payload = _extract_research_payload_from_request()
+        force_restart = bool(request.args.get("force", False))
+        job = research_job_manager.start_research_job(payload, force_restart=force_restart)
 
-        # Handle multipart file upload
-        if request.files and "image" in request.files:
-            uploaded = request.files["image"]
-            if uploaded.filename:
-                dest = UPLOAD_DIR / f"seed_{int(time.time())}_{uploaded.filename}"
-                uploaded.save(str(dest))
-                seed_image_input = str(dest)
+        # If client requested synchronous response (e.g. legacy test client or sync param)
+        sync_mode = request.args.get("sync", "").lower() in ("true", "1") or request.headers.get("X-Sync-Mode") == "true"
+        if sync_mode:
+            # Bounded wait for job completion
+            t_wait_start = time.time()
+            while job.status in [JobStatus.QUEUED.value, JobStatus.RUNNING.value] and (time.time() - t_wait_start) < 30.0:
+                time.sleep(0.2)
+            if job.status == JobStatus.COMPLETED.value and job.results:
+                return jsonify(job.results)
+            elif job.status == JobStatus.FAILED.value:
+                return jsonify({"success": False, "error": job.error or "Research failed"}), 500
 
-        # Handle form data
-        if request.form:
-            product_title = request.form.get("product_title") or request.form.get("name") or product_title
-            model_number = request.form.get("model_number") or request.form.get("modelNumber") or ""
-            article_number = request.form.get("article_number") or request.form.get("articleNumber") or ""
-            part_number = request.form.get("part_number") or request.form.get("partNumber") or ""
-            product_sku = request.form.get("product_sku") or request.form.get("sku") or model_number or article_number or part_number or product_sku
-            brand = request.form.get("brand") or request.form.get("manufacturer") or ""
-            category = request.form.get("category") or category
-            product_id = request.form.get("product_id") or request.form.get("id") or product_id
-            user_prompt = request.form.get("prompt") or request.form.get("user_prompt") or ""
-            if not seed_image_input:
-                seed_image_input = request.form.get("seed_image") or request.form.get("thumbnail") or request.form.get("image")
-            q_str = request.form.get("target_queries")
-            if q_str:
-                try:
-                    target_queries = json.loads(q_str) if q_str.startswith("[") else q_str.split("\n")
-                except Exception:
-                    target_queries = [q_str]
-            url_str = request.form.get("sourceUrls") or request.form.get("dynamic_urls")
-            if url_str:
-                try:
-                    dynamic_urls = json.loads(url_str) if url_str.startswith("[") else url_str.split("\n")
-                except Exception:
-                    dynamic_urls = [url_str]
-
-        # Handle JSON body
-        if request.is_json and request.json:
-            data = request.json
-            product_title = data.get("product_title") or data.get("name") or product_title
-            model_number = data.get("model_number") or data.get("modelNumber") or model_number
-            article_number = data.get("article_number") or data.get("articleNumber") or article_number
-            part_number = data.get("part_number") or data.get("partNumber") or part_number
-            product_sku = data.get("product_sku") or data.get("sku") or model_number or article_number or part_number or product_sku
-            brand = data.get("brand") or data.get("manufacturer") or brand
-            category = data.get("category") or category
-            product_id = data.get("product_id") or data.get("id") or product_id
-            user_prompt = data.get("prompt") or data.get("user_prompt") or user_prompt
-            if not seed_image_input:
-                seed_image_input = data.get("seed_image") or data.get("thumbnail") or data.get("image")
-            target_queries = data.get("target_queries") or target_queries
-            dynamic_urls = data.get("dynamic_urls") or data.get("sourceUrls") or []
-
-        # Handle base64 Data URL if passed in JSON/form
-        if isinstance(seed_image_input, str) and seed_image_input.startswith("data:image"):
-            import base64
-            header, data_part = seed_image_input.split(",", 1)
-            raw_data = base64.b64decode(data_part)
-            dest = UPLOAD_DIR / f"upload_b64_{int(time.time())}.jpg"
-            with open(dest, "wb") as f:
-                f.write(raw_data)
-            seed_image_input = str(dest)
-
-        # Fallback neutral seed if None
-        if not seed_image_input:
-            seed_image_input = "https://images.unsplash.com/photo-1581291518857-4e27b48ff24e?w=600&auto=format&fit=crop&q=80"
-
-        logger.info(
-            f"[PRODUCT IDENTITY] Executing Retrieval V2 for '{product_title}' "
-            f"(Brand: {brand}, Model: {model_number}, Article: {article_number}, Part: {part_number}, SKU: {product_sku}, Cat: {category})"
-        )
-
-        start_time = time.time()
-        pipeline_manager = ScrapingPipelineManager()
-        pipeline_result = pipeline_manager.execute_pipeline(
-            seed_image=seed_image_input,
-            target_queries=target_queries,
-            max_candidates=15,
-            similarity_threshold=0.60,
-            dynamic_urls=dynamic_urls,
-            product_title=product_title,
-            product_sku=product_sku,
-            product_id=product_id,
-            model_number=model_number,
-            article_number=article_number,
-            part_number=part_number,
-            brand=brand,
-            category=category,
-            user_prompt=user_prompt
-        )
-
-        candidates = pipeline_result.get("candidates", [])
-        seed_coord = pipeline_result.get("seed_coordinates", {"x": 0.0, "y": 0.0})
-        telemetry = pipeline_result.get("telemetry_timing", {})
-        elapsed_sec = round(time.time() - start_time, 2)
-
-        sample_urls = []
-        if dynamic_urls:
-            for u in dynamic_urls:
-                sample_urls.append({"title": f"Official Source Page: {u}", "url": u, "selected": True})
+        # Standard job-aware response
+        if job.status == JobStatus.COMPLETED.value and job.results:
+            return jsonify(job.results)
 
         return jsonify({
             "success": True,
-            "totalImagesFound": pipeline_result.get("total_harvested", len(candidates)),
-            "totalAccepted": pipeline_result.get("total_accepted", len(candidates)),
-            "images": candidates,
-            "curated_images": candidates,
-            "rejected_images": pipeline_result.get("rejected_candidates", []),
-            "seed_coordinates": seed_coord,
-            "relatedUrls": sample_urls,
-            "cycleNumber": 1,
-            "research_duration_sec": elapsed_sec,
-            "executionTime": f"{elapsed_sec}s",
-            "executionTimeMs": int(elapsed_sec * 1000),
-            "telemetry": telemetry,
-            "plannedQueries": pipeline_result.get("planned_queries", []),
-            "summary": pipeline_result.get("research_summary", {}),
-            "research_summary": pipeline_result.get("research_summary", {}),
-            "best_reference": pipeline_result.get("best_reference"),
-            "gpuDevice": "NVIDIA GeForce RTX 4060 Laptop GPU"
+            "job_id": job.job_id,
+            "product_id": job.product_id,
+            "status": job.status,
+            "current_phase": job.current_phase,
+            "progress": job.progress,
+            "executionTime": f"{job.elapsed_time_sec}s",
+            "images": (job.results or {}).get("images", []),
+            "summary": (job.results or {}).get("summary", {
+                "total_retrieved": 0,
+                "duplicates_removed": 0,
+                "rejected_as_irrelevant": 0,
+                "verified_count": 0,
+                "selected_reference": 0
+            })
         })
-
 
     except Exception as e:
         logger.error(f"Error in /api/v1/scrape: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ==========================================
+# SERIALIZED PIXAL3D RECONSTRUCTION QUEUE APIS
+# ==========================================
+@app.route("/api/reconstruct/queue", methods=["POST"])
+@app.route("/api/v1/reconstruct/queue", methods=["POST"])
+@app.route("/api/v1/reconstruct", methods=["POST"])
+@app.route("/api/reconstruct", methods=["POST"])
+@app.route("/api/csg/generate", methods=["POST"])
+def enqueue_reconstruction():
+    """
+    POST /api/reconstruct/queue
+    Enqueues a 3D reconstruction request to the serialized Pixal3D single-slot GPU queue.
+    Preserves exact approved reference image across queuing.
+    """
+    try:
+        data = request.json or {}
+        image_input = (
+            data.get("reference_image") or
+            data.get("selected_reference") or
+            data.get("image_url") or
+            data.get("local_path") or
+            data.get("seed_image") or
+            data.get("thumbnail")
+        )
+        product_name = data.get("name") or data.get("product_title") or "Product Asset"
+        product_id = data.get("id") or data.get("product_id") or f"prod_{int(time.time())}"
+        engine_target = data.get("engine") or data.get("reconstruction_engine") or "Pixal3D"
+
+        if not image_input:
+            image_input = "https://images.unsplash.com/photo-1581291518857-4e27b48ff24e?w=600&auto=format&fit=crop&q=80"
+
+        # Handle base64 Data URL if passed
+        if isinstance(image_input, str) and image_input.startswith("data:image"):
+            import base64
+            header, data_part = image_input.split(",", 1)
+            raw_data = base64.b64decode(data_part)
+            dest = UPLOAD_DIR / f"reconstruct_b64_{int(time.time())}.jpg"
+            with open(dest, "wb") as f:
+                f.write(raw_data)
+            image_input = str(dest)
+
+        logger.info(f"[RECONSTRUCTION QUEUE] Enqueueing '{product_name}' (ID: {product_id}) using engine '{engine_target}'")
+        job = reconstruct_queue_manager.enqueue_reconstruction(
+            product_id=product_id,
+            reference_image=image_input,
+            product_name=product_name,
+            engine=engine_target,
+            product_metadata=data
+        )
+
+        # If client requested synchronous completion (e.g. legacy tests)
+        sync_mode = request.args.get("sync", "").lower() in ("true", "1") or request.headers.get("X-Sync-Mode") == "true"
+        if sync_mode:
+            t_wait_start = time.time()
+            while job.status in [ReconstructionStatus.QUEUED.value, ReconstructionStatus.RECONSTRUCTING.value] and (time.time() - t_wait_start) < 180.0:
+                time.sleep(0.1)
+            if job.status == ReconstructionStatus.COMPLETED.value and job.result:
+                return jsonify(job.result)
+            elif job.status == ReconstructionStatus.FAILED.value:
+                return jsonify({"success": False, "error": job.error or "Reconstruction failed"}), 500
+
+        # Standard queued response (always fresh 202 Queued)
+        status_dict = reconstruct_queue_manager.get_job_status(job.job_id)
+        return jsonify({
+            "success": True,
+            "job_id": job.job_id,
+            "product_id": job.product_id,
+            "status": job.status,
+            "queue_position": (status_dict or {}).get("queue_position", 1),
+            "reconstruction_engine": job.engine,
+            "job": status_dict
+        }), 202
+
+    except Exception as e:
+        logger.error(f"Error in /api/reconstruct/queue: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e), "status": "FAILED"}), 500
+
+
+@app.route("/api/reconstruct/status/<product_or_job_id>", methods=["GET"])
+@app.route("/api/v1/reconstruct/status/<product_or_job_id>", methods=["GET"])
+def get_reconstruct_status(product_or_job_id):
+    """
+    GET /api/reconstruct/status/<product_or_job_id>
+    Returns current reconstruction queue status, position, and 3D result when completed.
+    Guarantees canonical job lifecycle status (QUEUED, RECONSTRUCTING/RUNNING, COMPLETED, FAILED, CANCELLED)
+    is never overwritten by result mesh status (e.g. MODEL_READY).
+    """
+    try:
+        status_dict = reconstruct_queue_manager.get_job_status(product_or_job_id)
+        if not status_dict:
+            return jsonify({"success": False, "status": "NOT_FOUND", "message": f"No reconstruction job for {product_or_job_id}"}), 404
+
+        canonical_status = status_dict["status"]
+        resp_data = {
+            "success": True,
+            "job": status_dict,
+            "status": canonical_status,
+            "queue_position": status_dict.get("queue_position", 0)
+        }
+        if canonical_status == ReconstructionStatus.COMPLETED.value and status_dict.get("result"):
+            result_payload = dict(status_dict["result"])
+            # Flatten result metadata (e.g. model_url, model_path, generation_time_sec) into resp_data
+            resp_data.update(result_payload)
+            # CANONICAL STATUS GUARANTEE:
+            # Result metadata contains {"status": "MODEL_READY"}, but top-level lifecycle
+            # status MUST remain the canonical job status (COMPLETED).
+            resp_data["status"] = ReconstructionStatus.COMPLETED.value
+            resp_data["result"] = result_payload
+
+        return jsonify(resp_data)
+    except Exception as e:
+        logger.error(f"Error in /api/reconstruct/status: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/reconstruct/queue", methods=["GET"])
+@app.route("/api/v1/reconstruct/queue", methods=["GET"])
+def get_reconstruction_queue():
+    """
+    GET /api/reconstruct/queue
+    Returns the current state of the serialized GPU reconstruction queue.
+    """
+    try:
+        q_status = reconstruct_queue_manager.get_queue_status()
+        return jsonify({
+            "success": True,
+            **q_status
+        })
+    except Exception as e:
+        logger.error(f"Error in /api/reconstruct/queue: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/reconstruct/cancel/<product_or_job_id>", methods=["POST"])
+@app.route("/api/v1/reconstruct/cancel/<product_or_job_id>", methods=["POST"])
+def cancel_reconstruction(product_or_job_id):
+    """
+    POST /api/reconstruct/cancel/<product_or_job_id>
+    Safely cancels a queued reconstruction job.
+    """
+    try:
+        ok = reconstruct_queue_manager.cancel_reconstruction(product_or_job_id)
+        job_status = reconstruct_queue_manager.get_job_status(product_or_job_id)
+        return jsonify({
+            "success": ok,
+            "status": (job_status or {}).get("status", "NOT_FOUND"),
+            "job": job_status
+        })
+    except Exception as e:
+        logger.error(f"Error in /api/reconstruct/cancel: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/reconstruct/retry/<product_or_job_id>", methods=["POST"])
+@app.route("/api/v1/reconstruct/retry/<product_or_job_id>", methods=["POST"])
+def retry_reconstruction(product_or_job_id):
+    """
+    POST /api/reconstruct/retry/<product_or_job_id>
+    Enqueues a fresh reconstruction job for an existing product/job,
+    guaranteeing a new job ID and fresh neural inference execution.
+    """
+    try:
+        new_job = reconstruct_queue_manager.retry_reconstruction(product_or_job_id)
+        status_dict = reconstruct_queue_manager.get_job_status(new_job.job_id)
+        return jsonify({
+            "success": True,
+            "job_id": new_job.job_id,
+            "product_id": new_job.product_id,
+            "status": new_job.status,
+            "queue_position": (status_dict or {}).get("queue_position", 1),
+            "reconstruction_engine": new_job.engine,
+            "job": status_dict
+        }), 202
+    except ValueError as ve:
+        return jsonify({"success": False, "error": str(ve)}), 404
+    except Exception as e:
+        logger.error(f"Error in /api/reconstruct/retry: {e}", exc_info=True)
         return jsonify({"success": False, "error": str(e)}), 500
 
 
@@ -409,87 +737,6 @@ def run_cascade():
 
 
 # ==========================================
-# REAL 3D RECONSTRUCTION (TRIPOSR NEURAL ENGINE)
-# ==========================================
-@app.route("/api/v1/reconstruct", methods=["POST"])
-@app.route("/api/reconstruct", methods=["POST"])
-@app.route("/api/csg/generate", methods=["POST"])
-def reconstruct_3d_asset():
-    """
-    POST /api/v1/reconstruct
-    Accepts reference image (path, URL, or base64) and product metadata.
-    Invokes TripoSREngine (or fallback Pixel3DEngine) to reconstruct watertight 3D GLB model.
-    """
-    try:
-        data = request.json or {}
-        image_input = data.get("reference_image") or data.get("image_url") or data.get("local_path") or data.get("seed_image") or data.get("thumbnail")
-        product_name = data.get("name") or data.get("product_title") or "Product Asset"
-        product_id = data.get("id") or data.get("product_id") or f"prod_{int(time.time())}"
-        engine_target = data.get("engine") or data.get("reconstruction_engine") or "TripoSR"
-
-        if not image_input:
-            # Fallback to neutral seed image
-            image_input = "https://images.unsplash.com/photo-1581291518857-4e27b48ff24e?w=600&auto=format&fit=crop&q=80"
-
-        # Handle base64 Data URL if passed
-        if isinstance(image_input, str) and image_input.startswith("data:image"):
-            import base64
-            header, data_part = image_input.split(",", 1)
-            raw_data = base64.b64decode(data_part)
-            dest = UPLOAD_DIR / f"reconstruct_b64_{int(time.time())}.jpg"
-            with open(dest, "wb") as f:
-                f.write(raw_data)
-            image_input = str(dest)
-
-        logger.info(f"[RECONSTRUCTION] Ingesting reference image for '{product_name}' (ID: {product_id}) using engine '{engine_target}'")
-        reconstruction_service = ReconstructionService.get_instance()
-        result = reconstruction_service.generate_3d_asset(
-            reference_image=image_input,
-            product_metadata={"name": product_name, "id": product_id},
-            engine=engine_target
-        )
-
-        if not result.get("success"):
-            return jsonify({
-                "success": False,
-                "error": result.get("error", "Reconstruction failed"),
-                "reconstruction_engine": result.get("reconstruction_engine", engine_target),
-                "status": "FAILED"
-            }), 500
-
-        # Perform automatic 3D validation check
-        val_result = reconstruction_service.validate_mesh_asset(result["local_path"])
-
-        return jsonify({
-            "success": True,
-            "asset_id": result["asset_id"],
-            "model_url": result["model_url"],
-            "model_path": result["local_path"],
-            "local_path": result["local_path"],
-            "model_filename": result["model_filename"],
-            "format": result["format"],
-            "reconstruction_engine": result["reconstruction_engine"],
-            "generation_time_sec": result["generation_time_sec"],
-            "generation_time_ms": result["generation_time_ms"],
-            "cache_hit": result.get("cache_hit", False),
-            "telemetry": result.get("telemetry", {}),
-            "mesh_telemetry": result["mesh_telemetry"],
-            "mesh_stats": {
-                "vertex_count": result["mesh_telemetry"].get("vertices", 0),
-                "face_count": result["mesh_telemetry"].get("triangles", 0),
-                "watertight": result["mesh_telemetry"].get("is_watertight", True),
-                "euler_characteristic": result["mesh_telemetry"].get("euler_characteristic", 2)
-            },
-            "validation": val_result,
-            "status": "MODEL_READY" if val_result.get("valid") else "VALIDATION_WARNING"
-        })
-
-    except Exception as e:
-        logger.error(f"Error in /api/v1/reconstruct: {e}", exc_info=True)
-        return jsonify({"success": False, "error": str(e), "reconstruction_engine": "TripoSR", "status": "FAILED"}), 500
-
-
-# ==========================================
 # 3D ASSET VALIDATION (3D APPROVAL PHASE)
 # ==========================================
 @app.route("/api/v1/validate-3d", methods=["POST"])
@@ -521,4 +768,7 @@ def validate_3d_model():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=True)
+    use_reloader = os.environ.get("FLASK_USE_RELOADER", "false").lower() in ("true", "1", "yes")
+    app.run(host="0.0.0.0", port=port, debug=True, use_reloader=use_reloader)
+
+

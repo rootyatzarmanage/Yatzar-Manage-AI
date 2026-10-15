@@ -226,6 +226,163 @@ class TestIdentifierPolicyAndQueryCascade(unittest.TestCase):
 
         print("[OK] Test 6 passed: Fine-grained identifier validator verified.")
 
+    def test_07_case_a_oem_model_equals_product_id(self):
+        """
+        CASE A: OEM model equals product ID (e.g. ViewSonic LS800HD).
+        Input:
+            product_id = "LS800HD"
+            model_number = "LS800HD"
+            brand = "ViewSonic"
+            product_name = "ViewSonic Laser Projector"
+        Expected:
+            - model preserved
+            - canonical model preserved
+            - exact-model queries generated containing "LS800HD"
+        """
+        product_id = "LS800HD"
+        model_number = "LS800HD"
+        brand = "ViewSonic"
+        product_name = "ViewSonic Laser Projector"
+
+        mfr_id = extract_verified_manufacturer_identifier(
+            model_number=model_number,
+            product_id=product_id
+        )
+        self.assertEqual(mfr_id, "LS800HD", "Valid OEM model number must be preserved when model_number == product_id")
+
+        p_ident = ProductIdentity(
+            internal_id=product_id,
+            brand=brand,
+            product_name=product_name,
+            model_number=model_number
+        )
+        from services.identifier_policy import normalize_product_identity
+        canonical = normalize_product_identity(p_ident)
+        self.assertEqual(canonical.canonical_model, "LS800HD", "Canonical model must preserve LS800HD")
+
+        queries = build_prioritized_search_queries(
+            product_id=product_id,
+            product_name=product_name,
+            model_number=model_number,
+            brand=brand
+        )
+        tier_1 = [q["query"] for q in queries if q["priority"] == 1]
+        self.assertGreater(len(tier_1), 0, "Tier 1 exact-model queries must be generated")
+        self.assertTrue(any("LS800HD" in q for q in tier_1), f"Exact-model query must contain 'LS800HD': {tier_1}")
+
+        print(f"[OK] Case A passed: OEM model == product ID preserved -> Tier 1 queries: {tier_1}")
+
+    def test_08_case_b_oem_sku_differs_from_product_id(self):
+        """
+        CASE B: OEM SKU differs from internal product ID.
+        Input:
+            product_id = "internal_123"
+            model_number = "LS800HD"
+            brand = "ViewSonic"
+        Expected:
+            - LS800HD preserved
+            - existing behavior remains correct (internal_123 strictly excluded)
+        """
+        product_id = "internal_123"
+        model_number = "LS800HD"
+        brand = "ViewSonic"
+
+        mfr_id = extract_verified_manufacturer_identifier(
+            model_number=model_number,
+            product_id=product_id
+        )
+        self.assertEqual(mfr_id, "LS800HD", "LS800HD must be preserved when differing from internal_123")
+
+        queries = build_prioritized_search_queries(
+            product_id=product_id,
+            product_name="ViewSonic Laser Projector",
+            model_number=model_number,
+            brand=brand
+        )
+        tier_1 = [q["query"] for q in queries if q["priority"] == 1]
+        self.assertGreater(len(tier_1), 0, "Tier 1 must generate queries")
+        self.assertTrue(any("LS800HD" in q for q in tier_1))
+
+        for q in queries:
+            self.assertNotIn("internal_123", q["query"], f"internal_123 must not leak into query: {q['query']}")
+
+        print(f"[OK] Case B passed: Differing SKU preserved and internal_123 excluded.")
+
+    def test_09_case_c_genuine_internal_identifier_protection(self):
+        """
+        CASE C: Genuine internal identifier protection.
+        Verify that real internal slugs/IDs passed in model_number/product_id are rejected.
+        """
+        test_internal_cases = [
+            ("PROD-GEN-01", "Generic placeholder / internal prefix"),
+            ("internal_slug_99", "Internal slug pattern with prefix"),
+            ("prod-temp-asset", "Internal hyphenated slug pattern"),
+            ("viewsonic-laser-projector", "Kebab-case multi-word title slug"),
+            ("c3f4b8109d7a", "12-char hex hash"),
+            ("8f7b3c2e-4d1a-4f5b-9c12-3e4f5a6b7c8d", "Standard UUID"),
+            ("10492", "Small integer DB key"),
+        ]
+
+        for token, desc in test_internal_cases:
+            # Direct validator test
+            self.assertFalse(
+                is_safe_manufacturer_identifier(token),
+                f"Token '{token}' ({desc}) must be rejected by is_safe_manufacturer_identifier"
+            )
+
+            # extract_verified_manufacturer_identifier test
+            mfr_id = extract_verified_manufacturer_identifier(
+                model_number=token,
+                product_id=token
+            )
+            self.assertIsNone(mfr_id, f"Token '{token}' ({desc}) must not be accepted as manufacturer ID")
+
+            # Query planner test
+            queries = build_prioritized_search_queries(
+                product_id=token,
+                product_name="Generic Test Asset",
+                model_number=token
+            )
+            tier_1 = [q["query"] for q in queries if q["priority"] == 1]
+            self.assertEqual(len(tier_1), 0, f"Token '{token}' ({desc}) must not generate Tier 1 queries")
+            for q in queries:
+                self.assertNotIn(token, q["query"], f"Token '{token}' ({desc}) must never appear in queries: {q['query']}")
+
+        print(f"[OK] Case C passed: All {len(test_internal_cases)} genuine internal identifiers rejected.")
+
+    def test_10_case_d_case_insensitive_equality(self):
+        """
+        CASE D: Case-insensitive equality between model_number and product_id.
+        Input:
+            product_id = "ls800hd"
+            model_number = "LS800HD"
+            brand = "ViewSonic"
+        Expected:
+            - legitimate model is still preserved
+            - queries generated containing "LS800HD"
+        """
+        product_id = "ls800hd"
+        model_number = "LS800HD"
+        brand = "ViewSonic"
+
+        mfr_id = extract_verified_manufacturer_identifier(
+            model_number=model_number,
+            product_id=product_id
+        )
+        self.assertEqual(mfr_id, "LS800HD", "Case-insensitive equality must still preserve legitimate model")
+
+        queries = build_prioritized_search_queries(
+            product_id=product_id,
+            product_name="ViewSonic Laser Projector",
+            model_number=model_number,
+            brand=brand
+        )
+        tier_1 = [q["query"] for q in queries if q["priority"] == 1]
+        self.assertGreater(len(tier_1), 0)
+        self.assertTrue(any("LS800HD" in q for q in tier_1))
+
+        print(f"[OK] Case D passed: Case-insensitive equality preserved -> {tier_1}")
+
 
 if __name__ == "__main__":
     unittest.main()

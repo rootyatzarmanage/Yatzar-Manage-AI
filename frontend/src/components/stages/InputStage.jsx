@@ -11,7 +11,14 @@ import {
 } from 'lucide-react';
 
 export default function InputStage() {
-  const { activeProduct, updateActiveProduct, startScrapePipeline, isProcessing } = useProducts();
+  const { 
+    activeProduct, 
+    updateActiveProduct, 
+    startResearch, 
+    activeResearchJob, 
+    isProcessing,
+    setCurrentStage 
+  } = useProducts();
 
   // Local draft state for zero-latency instant typing
   const [draft, setDraft] = useState(() => ({
@@ -30,7 +37,6 @@ export default function InputStage() {
   }));
 
   const activeIdRef = useRef(activeProduct?.id);
-  const [elapsedTime, setElapsedTime] = useState(0);
 
   // Sync draft state only when switching to a different product ID
   useEffect(() => {
@@ -53,24 +59,7 @@ export default function InputStage() {
     }
   }, [activeProduct?.id]);
 
-  // Live timer during scraping
-  useEffect(() => {
-    let interval = null;
-    if (isProcessing) {
-      setElapsedTime(0);
-      const startTime = Date.now();
-      interval = setInterval(() => {
-        setElapsedTime((Date.now() - startTime) / 1000);
-      }, 100);
-    } else {
-      if (interval) clearInterval(interval);
-    }
-    return () => {
-      if (interval) clearInterval(interval);
-    };
-  }, [isProcessing]);
-
-  // Local input change handler: pure local state update with 0 global rerender overhead
+  // Local input change handler
   const handleChange = (field, value) => {
     setDraft(prev => ({ ...prev, [field]: value }));
   };
@@ -124,7 +113,8 @@ export default function InputStage() {
       imageFile: draft.imageFile || null
     };
     updateActiveProduct(payload);
-    startScrapePipeline(payload);
+    startResearch(payload);
+    setCurrentStage(1);
   };
 
   return (
@@ -341,25 +331,47 @@ export default function InputStage() {
             </div>
           </div>
 
-          {/* Action Footer with Normal Timer */}
-          <div className="pt-3 flex justify-end">
-            <button
-              onClick={handleScrapeClick}
-              disabled={isProcessing}
-              className="flex items-center gap-2 px-6 py-2.5 text-xs font-semibold text-white bg-brand-500 hover:bg-brand-600 disabled:bg-brand-500/80 rounded-xl shadow-md shadow-brand-500/25 transition-all hover:scale-[1.01] active:scale-[0.99]"
-            >
-              {isProcessing ? (
-                <>
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  <span className="font-mono">Researching... ({elapsedTime.toFixed(1)}s)</span>
-                </>
-              ) : (
-                <>
-                  <Search className="w-3.5 h-3.5" />
-                  <span>Start Autonomous Pipeline</span>
-                </>
+          {/* Action Footer with Job Awareness */}
+          <div className="pt-3 flex items-center justify-between">
+            {isProcessing ? (
+              <div className="flex items-center gap-2 text-xs text-brand-600 dark:text-brand-400">
+                <Loader2 className="w-4 h-4 animate-spin text-brand-500" />
+                <span className="font-semibold">{activeResearchJob?.current_phase || 'Research in progress'}</span>
+                <span className="font-mono text-[11px] text-[#64748B] dark:text-[#8D9CB8]">({activeResearchJob?.executionTime || '0s'})</span>
+              </div>
+            ) : (
+              <div></div>
+            )}
+
+            <div className="flex items-center gap-2">
+              {isProcessing && (
+                <button
+                  type="button"
+                  onClick={() => setCurrentStage(1)}
+                  className="px-4 py-2 text-xs font-semibold text-brand-600 dark:text-brand-400 bg-brand-50 dark:bg-brand-950/40 hover:bg-brand-100 rounded-xl border border-brand-200 dark:border-brand-800 transition-colors"
+                >
+                  View Live Research →
+                </button>
               )}
-            </button>
+
+              <button
+                onClick={handleScrapeClick}
+                disabled={isProcessing}
+                className="flex items-center gap-2 px-6 py-2.5 text-xs font-semibold text-white bg-brand-500 hover:bg-brand-600 disabled:bg-slate-400 dark:disabled:bg-slate-700 rounded-xl shadow-md shadow-brand-500/25 transition-all hover:scale-[1.01] active:scale-[0.99]"
+              >
+                {isProcessing ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Researching in Background...</span>
+                  </>
+                ) : (
+                  <>
+                    <Search className="w-3.5 h-3.5" />
+                    <span>Start Autonomous Pipeline</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       </div>

@@ -32,11 +32,54 @@ export default function ReferenceSheetStage() {
   const [renderedViews, setRenderedViews] = useState(activeProduct?.renderedViews || null);
   const [previewModalImg, setPreviewModalImg] = useState(null);
 
-  // Selected original input image
-  const originalImage = activeProduct?.selected_reference?.url || 
-    activeProduct?.best_reference?.url || 
-    activeProduct?.thumbnail || 
-    null;
+  // Helper to resolve local paths or relative URLs to accessible HTTP URLs
+  const resolveImageUrl = (imgUrl) => {
+    if (!imgUrl) return null;
+    const str = String(imgUrl).trim();
+    if (str.startsWith('http://') || str.startsWith('https://') || str.startsWith('data:')) {
+      return str;
+    }
+    const clean = str.replace(/^backend[\\/]/, '').replace(/^[A-Za-z]:[\\/].*?cache[\\/]/, 'cache/');
+    const slashClean = clean.startsWith('/') ? clean : `/${clean}`;
+    return `${API_BASE}${slashClean}`;
+  };
+
+  // Determine true original photographic reference image for this 3D specification sheet
+  const getReferenceImage = () => {
+    // 1. Exact model reference image that generated this 3D model
+    if (activeProduct?.model_reference_url) {
+      return activeProduct.model_reference_url;
+    }
+
+    // 2. User's manually selected reference (if not a schematic diagram)
+    const selRef = activeProduct?.selected_reference;
+    if (selRef?.url && selRef?.target_evidence !== 'TECHNICAL_DRAWING' && selRef?.angle !== 'Technical View' && selRef?.verified_viewpoint !== 'TECHNICAL') {
+      return selRef.url;
+    }
+
+    // 3. Best verified reference if not a technical drawing
+    const bestRef = activeProduct?.best_reference;
+    if (bestRef?.url && bestRef?.target_evidence !== 'TECHNICAL_DRAWING' && bestRef?.angle !== 'Technical View' && bestRef?.verified_viewpoint !== 'TECHNICAL') {
+      return bestRef.url;
+    }
+
+    // 4. First verified photographic image from candidate pool
+    const photoCandidate = (activeProduct?.scrapedImages || []).find(
+      img => img?.url && 
+             img?.status === 'VERIFIED' && 
+             img?.target_evidence !== 'TECHNICAL_DRAWING' && 
+             img?.angle !== 'Technical View' &&
+             img?.verified_viewpoint !== 'TECHNICAL'
+    );
+    if (photoCandidate?.url) {
+      return photoCandidate.url;
+    }
+
+    // 5. Fallback
+    return selRef?.url || bestRef?.url || activeProduct?.thumbnail || null;
+  };
+
+  const originalImage = resolveImageUrl(getReferenceImage());
 
   // Auto-render multi-views when modelUrl is available and views are not cached
   useEffect(() => {
@@ -200,10 +243,10 @@ export default function ReferenceSheetStage() {
           <div className="text-right text-xs">
             <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-400 font-bold border border-emerald-200 dark:border-emerald-800/60 mb-1">
               <ShieldCheck className="w-3.5 h-3.5" />
-              <span>TRIPOSR VERIFIED</span>
+              <span>{`${(activeProduct?.reconstructionEngine || 'Pixal3D').toUpperCase()} VERIFIED`}</span>
             </div>
             <div className="text-[11px] text-[#64748B] dark:text-[#8D9CB8]">
-              Engine: <span className="font-semibold text-[#1C2434] dark:text-white">TripoSR (CUDA)</span>
+              Engine: <span className="font-semibold text-[#1C2434] dark:text-white">{activeProduct?.reconstructionEngine ? `${activeProduct.reconstructionEngine} (TencentARC/CUDA)` : 'Pixal3D (TencentARC/CUDA)'}</span>
             </div>
           </div>
         </div>

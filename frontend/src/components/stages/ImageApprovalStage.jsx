@@ -88,16 +88,18 @@ export default function ImageApprovalStage() {
     // Check if the selection has actually changed
     const prevUrl = activeProduct?.selected_reference?.url;
     const newUrl = candidate?.url;
-    const isDifferent = prevUrl !== newUrl;
+    const isDifferent = prevUrl !== newUrl || (activeProduct?.modelUrl && activeProduct?.model_reference_url !== newUrl);
 
     // Immediately persist user's manual selection to activeProduct
     updateActiveProduct({
       selected_reference: candidate,
       is_manual_selection: true,
-      // If reference changed, invalidate cached model stats to prevent stale results
+      // If reference changed, invalidate downstream model stats to prevent stale results
       ...(isDifferent ? {
         modelUrl: null,
+        model_3d: null,
         modelPath: null,
+        model_reference_url: null,
         meshStats: null,
         reconstructionDuration: null,
         reconstruction_duration_sec: null,
@@ -146,6 +148,7 @@ export default function ImageApprovalStage() {
       best_reference: nextSelected,
       ...(wasSelected ? {
         modelUrl: null,
+        model_3d: null,
         modelPath: null,
         meshStats: null,
         reconstructionDuration: null,
@@ -164,7 +167,7 @@ export default function ImageApprovalStage() {
 
     const prevUrl = activeProduct?.selected_reference?.url;
     const newUrl = selectedCandidate.url;
-    const isDifferent = prevUrl !== newUrl;
+    const isDifferent = prevUrl !== newUrl || (activeProduct?.modelUrl && activeProduct?.model_reference_url !== newUrl);
 
     updateActiveProduct({
       currentStage: 3,
@@ -173,7 +176,9 @@ export default function ImageApprovalStage() {
       is_manual_selection: true,
       ...(isDifferent ? {
         modelUrl: null,
+        model_3d: null,
         modelPath: null,
+        model_reference_url: null,
         meshStats: null,
         reconstructionDuration: null,
         reconstruction_duration_sec: null,
@@ -211,7 +216,7 @@ export default function ImageApprovalStage() {
               </h1>
             </div>
             <p className="text-xs text-[#64748B] dark:text-[#8D9CB8]">
-              Curated candidate pool filtered by DINOv2 visual deduplication and quality triage. Select your authoritative reference for TripoSR.
+              Curated candidate pool filtered by DINOv2 visual deduplication and quality triage. Select your authoritative reference for Pixal3D neural reconstruction.
             </p>
           </div>
 
@@ -254,7 +259,7 @@ export default function ImageApprovalStage() {
             <div className="md:col-span-7 space-y-4">
               <div>
                 <span className="text-[11px] uppercase font-bold text-[#64748B] dark:text-[#8D9CB8] tracking-wider block">
-                  Authoritative Input for TripoSR
+                  Authoritative Input for Pixal3D
                 </span>
                 <h2 className="text-lg font-bold text-[#1C2434] dark:text-white mt-0.5">
                   {selectedCandidate.title || activeProduct?.name || 'Product Asset'}
@@ -280,7 +285,7 @@ export default function ImageApprovalStage() {
                 </div>
                 <div className="flex items-center gap-2 text-[#1C2434] dark:text-white font-medium">
                   <Check className="w-4 h-4 text-emerald-500 flex-shrink-0" />
-                  <span>TripoSR CUDA Pipeline Linked</span>
+                  <span>Pixal3D CUDA Pipeline Linked</span>
                 </div>
               </div>
 
@@ -520,7 +525,7 @@ export default function ImageApprovalStage() {
             className="flex items-center gap-2 px-6 py-2.5 text-xs font-semibold text-white bg-brand-500 hover:bg-brand-600 disabled:bg-slate-400 dark:disabled:bg-slate-700 rounded-xl shadow-md shadow-brand-500/25 transition-all hover:scale-[1.01] active:scale-[0.99]"
           >
             <Box className="w-3.5 h-3.5" />
-            <span>Generate 3D Model with TripoSR</span>
+            <span>Generate 3D Model with Pixal3D</span>
             <ArrowRight className="w-3.5 h-3.5" />
           </button>
         </div>

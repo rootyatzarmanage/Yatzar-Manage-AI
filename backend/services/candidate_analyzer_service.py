@@ -528,9 +528,12 @@ class CandidateAnalyzerService:
         has_product_name = False
         if product_name:
             norm_name = product_name.lower()
+            brand_lower = brand.lower() if brand else ""
             tokens = [
                 t.strip("-_/.,") for t in re.split(r"\s+", norm_name)
-                if len(t.strip("-_/.,")) >= 2 and t.strip("-_/.,") not in GENERIC_STOP_TOKENS
+                if len(t.strip("-_/.,")) >= 2 
+                and t.strip("-_/.,") not in GENERIC_STOP_TOKENS
+                and t.strip("-_/.,") != brand_lower
             ]
             if tokens:
                 matched_tokens = []

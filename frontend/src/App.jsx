@@ -51,6 +51,45 @@ function MainContent() {
           {renderStage()}
         </main>
       </div>
+
+      {/* Floating Notifications */}
+      <ToastContainer />
+    </div>
+  );
+}
+
+function ToastContainer() {
+  const { notifications = [], dismissNotification } = useProducts();
+
+  if (notifications.length === 0) return null;
+
+  return (
+    <div className="fixed bottom-6 right-6 z-50 flex flex-col gap-2 max-w-sm w-full pointer-events-none">
+      {notifications.map((n) => (
+        <div
+          key={n.id}
+          className={`pointer-events-auto flex items-center justify-between p-3.5 rounded-2xl shadow-xl border backdrop-blur-md transition-all animate-slide-up ${
+            n.type === 'success'
+              ? 'bg-emerald-950/90 text-emerald-100 border-emerald-700/50'
+              : n.type === 'error'
+              ? 'bg-rose-950/90 text-rose-100 border-rose-700/50'
+              : 'bg-[#0E172E]/90 text-slate-100 border-[#1E2C52]'
+          }`}
+        >
+          <div className="flex items-center gap-2.5">
+            <div className={`w-2 h-2 rounded-full ${
+              n.type === 'success' ? 'bg-emerald-400' : n.type === 'error' ? 'bg-rose-400' : 'bg-brand-400'
+            }`} />
+            <p className="text-xs font-medium">{n.message}</p>
+          </div>
+          <button
+            onClick={() => dismissNotification(n.id)}
+            className="text-xs opacity-60 hover:opacity-100 px-1.5 py-0.5"
+          >
+            ✕
+          </button>
+        </div>
+      ))}
     </div>
   );
 }

@@ -15,7 +15,7 @@ const STAGES = [
   { id: 0, label: 'Input', icon: FileText, desc: 'Identity & Reference' },
   { id: 1, label: 'Research', icon: Search, desc: 'Web Reference Discovery' },
   { id: 2, label: 'Image Approval', icon: CheckCircle, desc: 'Best Reference Verified' },
-  { id: 3, label: '3D Generate', icon: Box, desc: 'TripoSR 3D Synthesis' },
+  { id: 3, label: '3D Generate', icon: Box, desc: 'Pixal3D 3D Synthesis' },
   { id: 4, label: '3D Approval', icon: Eye, desc: 'Automated Mesh QA' },
   { id: 5, label: 'Reference Sheet', icon: Layers, desc: 'Multi-View Spec Sheet' },
 ];
