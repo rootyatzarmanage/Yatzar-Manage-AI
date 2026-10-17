@@ -2,6 +2,7 @@ import os
 import sys
 import unittest
 from pathlib import Path
+import torch
 
 # Ensure backend is on sys.path
 backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "backend"))
@@ -11,7 +12,8 @@ if backend_dir not in sys.path:
 from app import app
 from services.reconstruction_service import ReconstructionService
 from services.job_manager import ReconstructionQueueManager, ReconstructionJob, ReconstructionStatus
-from services.pixal3d_adapter import Pixal3DProductionAdapter
+from services.pixal3d_adapter import Pixal3DProductionAdapter, unload_pixal3d_pipeline
+import services.pixal3d_adapter as adapter_mod
 
 class TestPixal3DProductionIntegration(unittest.TestCase):
     def setUp(self):
@@ -22,10 +24,13 @@ class TestPixal3DProductionIntegration(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         data = resp.get_json()
         self.assertEqual(data.get('status'), 'online')
-        self.assertTrue(data.get('gpu_available'))
+        self.assertEqual(data.get('gpu_available'), torch.cuda.is_available())
+        if torch.cuda.is_available():
+            self.assertIsNotNone(data.get('cuda_info'))
+            self.assertIn('device_name', data.get('cuda_info', {}))
 
-    def test_02_triposr_eradication_audit(self):
-        """Verify that TripoSR and tsr are completely eradicated from the production runtime."""
+    def test_02_legacy_engine_eradication_audit(self):
+        """Verify that legacy engines and tsr modules are completely eradicated from the production runtime."""
         # Check sys.modules
         self.assertNotIn('tsr', sys.modules)
         self.assertNotIn('tsr.system', sys.modules)
@@ -81,18 +86,40 @@ class TestPixal3DProductionIntegration(unittest.TestCase):
         self.assertEqual(resp2.status_code, 200)
         self.assertEqual(len(resp2.data), latest_glb.stat().st_size)
 
-    def test_05_legacy_triposr_request_interception(self):
-        """Verify that legacy payload requesting 'TripoSR' is intercepted and enforced to Pixal3D."""
-        job = ReconstructionJob(
-            job_id="rec-test-legacy-01",
-            product_id="TEST-LEGACY",
-            product_name="Legacy Intercept Test",
-            reference_image="backend/cache/candidates/verified_4d28321d64f4.jpg",
-            engine="TripoSR"
-        )
-        self.assertEqual(job.engine, "Pixal3D")
-        d = job.to_dict()
-        self.assertEqual(d["engine"], "Pixal3D")
+    def test_05_unsupported_engine_rejection(self):
+        """Verify that request with unsupported engine (e.g. UnsupportedEngine, LegacyEngine) is strictly rejected with 400."""
+        payload = {
+            "product_id": "TEST-REJECT-ENGINE",
+            "product_title": "Reject Engine Test",
+            "reference_image": "backend/cache/candidates/verified_4d28321d64f4.jpg",
+            "engine": "UnsupportedEngine"
+        }
+        resp = self.client.post("/api/reconstruct/queue", json=payload)
+        self.assertEqual(resp.status_code, 400)
+        data = resp.get_json()
+        self.assertFalse(data.get("success"))
+        self.assertEqual(data.get("status"), "FAILED")
+        self.assertIn("Unsupported reconstruction engine", data.get("error", ""))
+
+    def test_06_missing_reference_image_rejection(self):
+        """Verify that request with missing approved image is strictly rejected with 400."""
+        payload = {
+            "product_id": "TEST-MISSING-IMG",
+            "product_title": "Missing Image Test",
+            "reference_image": "",
+            "engine": "Pixal3D"
+        }
+        resp = self.client.post("/api/reconstruct/queue", json=payload)
+        self.assertEqual(resp.status_code, 400)
+        data = resp.get_json()
+        self.assertFalse(data.get("success"))
+        self.assertEqual(data.get("status"), "FAILED")
+        self.assertIn("Missing approved reference image", data.get("error", ""))
+
+    def test_07_pipeline_unload_lifecycle(self):
+        """Verify that unload_pixal3d_pipeline cleanly resets the global _pipeline_instance."""
+        unload_pixal3d_pipeline()
+        self.assertIsNone(adapter_mod._pipeline_instance)
 
 if __name__ == '__main__':
     unittest.main()

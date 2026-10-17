@@ -110,7 +110,13 @@ export default function InputStage() {
       height: draft.height !== '' && draft.height !== undefined ? Number(draft.height) : '',
       depth: draft.depth !== '' && draft.depth !== undefined ? Number(draft.depth) : '',
       thumbnail: draft.thumbnail || '',
-      imageFile: draft.imageFile || null
+      imageFile: draft.imageFile || null,
+      scrapedImages: [],
+      rejectedImages: [],
+      imagesCount: 0,
+      best_reference: null,
+      selected_reference: null,
+      currentStage: 1
     };
     updateActiveProduct(payload);
     startResearch(payload);

@@ -1,15 +1,15 @@
 """
 Official TencentARC Pixal3D Production Integration Adapter for Yatzar.
 
-Executes pixel-aligned 3D reconstruction using the verified official TencentARC/Pixal3D 1536 cascade.
-Preserves:
-- 1536 cascade resolution
+Executes pixel-aligned 3D reconstruction using the verified official TencentARC/Pixal3D pipeline:
+- 1536 HR Shape DiT Cascade (Multi-Scale Latents with DinoV3 conditioning)
+- 1024 Neural Texture Model (Flow-Matching DiT on 1024 subgrid)
+- Flexible Dual Grid (FDG) with 2048px PBR UV Texture Baking
 - Low-VRAM CPU offload mode (<6 GB peak VRAM on 8 GB GPU)
 - NAF fast subgrid attention
 - Sparse coordinate projection conditioning
 - Implicit GEMM flex_gemm submanifold sparse convolution
 - In-place LayerNorm token chunking
-- Flexible Dual Grid (FDG) 2048px PBR UV texture baking
 - Canonical glTF transformation
 """
 
@@ -57,7 +57,7 @@ def get_pixal3d_pipeline(device: str = "cuda"):
     if _pipeline_instance is not None:
         return _pipeline_instance
 
-    logger.info("[PIXAL3D ADAPTER] Initializing official TencentARC/Pixal3D pipeline (Low-VRAM, 1536 Cascade)...")
+    logger.info("[PIXAL3D ADAPTER] Initializing official TencentARC/Pixal3D pipeline (Low-VRAM, 1536 HR Shape Cascade + 1024 Texture Model)...")
     from standalone_pixal3d.inference import init_pipeline, MODEL_PATH
     
     t0 = time.perf_counter()
@@ -65,6 +65,40 @@ def get_pixal3d_pipeline(device: str = "cuda"):
     load_sec = round(time.perf_counter() - t0, 2)
     logger.info(f"[PIXAL3D ADAPTER] Pipeline loaded and resident in {load_sec}s")
     return _pipeline_instance
+
+
+def unload_pixal3d_pipeline():
+    """
+    Explicitly unloads the resident global Pixal3DImageTo3DPipeline,
+    releasing all sub-model weights, feature extractors, and CUDA tensors
+    to free maximum memory for downstream processing (e.g., CuMesh BVH decimation).
+    """
+    global _pipeline_instance
+    if _pipeline_instance is not None:
+        logger.info("[PIXAL3D ADAPTER] Unloading resident global Pixal3D pipeline...")
+        try:
+            if hasattr(_pipeline_instance, 'models') and isinstance(_pipeline_instance.models, dict):
+                for m_name, model in list(_pipeline_instance.models.items()):
+                    if hasattr(model, 'cpu'):
+                        model.cpu()
+                _pipeline_instance.models.clear()
+            for attr in ['image_cond_model_ss', 'image_cond_model_shape_512',
+                         'image_cond_model_shape_1024', 'image_cond_model_tex_1024']:
+                cond_model = getattr(_pipeline_instance, attr, None)
+                if cond_model is not None:
+                    if hasattr(cond_model, 'cpu'):
+                        cond_model.cpu()
+                    setattr(_pipeline_instance, attr, None)
+        except Exception as e:
+            logger.warning(f"[PIXAL3D ADAPTER] Non-fatal error while detaching pipeline models: {e}")
+        
+        _pipeline_instance = None
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            if hasattr(torch.cuda, 'ipc_collect'):
+                torch.cuda.ipc_collect()
+        logger.info("[PIXAL3D ADAPTER] Global _pipeline_instance successfully set to None and VRAM reclaimed.")
 
 
 class Pixal3DProductionAdapter:
@@ -188,16 +222,17 @@ class Pixal3DProductionAdapter:
         coords = mesh.coords
 
         # CRITICAL VRAM RECLAMATION BEFORE CuMesh / to_glb:
-        # CuMesh builds a BVH and simplifies ~26 million triangles using native cudaMalloc allocations.
-        # We must explicitly delete intermediate latents, unload the pipeline, and flush PyTorch's CUDA cache
-        # so CuMesh has the full 8 GB VRAM buffer available.
+        # CuMesh builds a BVH and simplifies triangles using native cudaMalloc allocations.
+        # In low_vram mode, all models reside in host CPU memory, so we only need to delete
+        # intermediate latent references and flush PyTorch's CUDA cache to make 100% of GPU VRAM
+        # available for CuMesh. The global pipeline remains resident in host memory for subsequent queue jobs.
         del mesh_list, mesh, shape_slat, tex_slat
-        self.pipeline = None
         gc.collect()
-        torch.cuda.empty_cache()
-        if hasattr(torch.cuda, 'ipc_collect'):
-            torch.cuda.ipc_collect()
-        logger.info(f"[PIXAL3D ADAPTER] Memory reclaimed for CuMesh: allocated={torch.cuda.memory_allocated() / (1024**2):.1f}MB, reserved={torch.cuda.memory_reserved() / (1024**2):.1f}MB")
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            if hasattr(torch.cuda, 'ipc_collect'):
+                torch.cuda.ipc_collect()
+        logger.info(f"[PIXAL3D ADAPTER] Memory reclaimed for CuMesh: allocated={torch.cuda.memory_allocated() / (1024**2):.1f}MB, reserved={torch.cuda.memory_reserved() / (1024**2):.1f}MB, resident_pipeline={_pipeline_instance is not None}")
 
         # 5. Mesh Postprocessing & GLB Export
         if progress_callback:
@@ -283,7 +318,11 @@ class Pixal3DProductionAdapter:
                 "components": body_count
             },
             "telemetry": {
-                "engine": "Pixal3D",
+                "engine": "TencentARC/Pixal3D",
+                "pipeline_architecture": "1536 HR Shape Cascade + 1024 Texture Model + 2048px PBR Texture Baking",
+                "hr_shape_resolution": 1536,
+                "texture_model_resolution": 1024,
+                "pbr_texture_baking_resolution": 2048,
                 "resolution": self.resolution,
                 "pipeline_type": self.pipeline_type,
                 "low_vram": self.low_vram,

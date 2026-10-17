@@ -1,14 +1,13 @@
 """
 3D Reconstruction Service for Yatzar.
 Primary Production Architecture:
-- Official TencentARC Pixal3D 1536 Cascade Neural 3D Generator
+- Official TencentARC Pixal3D (1536 HR Shape Cascade + 1024 Texture Model + 2048px PBR Texture Baking)
 - Pixel-aligned back-projection conditioning with DinoV3
 - Flow-Matching DiT sparse structure and multi-scale shape latents
 - Flexible Dual Grid (FDG) 2048px PBR UV texture baking
 - Low-VRAM CPU/GPU memory streaming architecture for 8 GB GPUs
 
 Produces high-fidelity, CAD-grade 3D product meshes exported to binary GLTF (.glb).
-All historical TripoSR implementations, dependencies, and fallbacks have been completely eradicated.
 """
 
 import os
@@ -184,10 +183,27 @@ class ReconstructionService:
         p_name = meta.get("name") or meta.get("product_title") or "Target Asset"
         p_id = meta.get("id") or meta.get("product_id") or f"prod_{int(time.time())}"
 
-        # Production engine is strictly Pixal3D
+        # Validate reference image presence
+        if not reference_image or (isinstance(reference_image, str) and not reference_image.strip()):
+            logger.error(f"[RECONSTRUCTION] Missing approved reference image for asset '{p_id}'. Aborting.")
+            return {
+                "success": False,
+                "error": "Missing approved reference image for 3D reconstruction",
+                "reconstruction_engine": "TencentARC/Pixal3D",
+                "status": "FAILED"
+            }
+
+        # Production engine is strictly TencentARC/Pixal3D
         engine_target = (engine or "Pixal3D").strip()
-        if "tripo" in engine_target.lower():
-            logger.warning(f"[RECONSTRUCTION] Deprecated engine request '{engine_target}' intercepted. TripoSR has been completely removed from production. Routing to official Pixal3D.")
+        valid_engines = ("pixal3d", "tencentarc/pixal3d")
+        if engine_target.lower() not in valid_engines:
+            logger.error(f"[RECONSTRUCTION] Unsupported engine '{engine_target}'. Sole production engine is TencentARC/Pixal3D.")
+            return {
+                "success": False,
+                "error": f"Unsupported reconstruction engine: '{engine_target}'. Sole production engine is TencentARC/Pixal3D.",
+                "reconstruction_engine": "TencentARC/Pixal3D",
+                "status": "FAILED"
+            }
         
         engine_tag = "pixal3d"
         img_fingerprint = compute_image_md5(reference_image)
@@ -251,6 +267,11 @@ class ReconstructionService:
                 "reconstruction_engine": "Pixal3D",
                 "status": "FAILED"
             }
+        finally:
+            import gc
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
     def validate_mesh_asset(self, glb_path_or_url: str) -> Dict[str, Any]:
         """Validates a generated .glb asset for topology, vertex count, and integrity."""

@@ -81,15 +81,28 @@ export default function ReferenceSheetStage() {
 
   const originalImage = resolveImageUrl(getReferenceImage());
 
+  const activeProductIdRef = useRef(activeProduct?.id);
+  const activeModelUrlRef = useRef(activeProduct?.modelUrl);
+
+  // Sync rendered views whenever active product or modelUrl changes
+  useEffect(() => {
+    activeProductIdRef.current = activeProduct?.id;
+    activeModelUrlRef.current = activeProduct?.modelUrl;
+    setRenderedViews(activeProduct?.renderedViews || null);
+    setRenderError(null);
+  }, [activeProduct?.id, activeProduct?.modelUrl, activeProduct?.renderedViews]);
+
   // Auto-render multi-views when modelUrl is available and views are not cached
   useEffect(() => {
-    if (activeProduct?.modelUrl && !renderedViews && !rendering) {
+    if (activeProduct?.modelUrl && !activeProduct?.renderedViews && !rendering) {
       generateMultiViews();
     }
-  }, [activeProduct?.modelUrl]);
+  }, [activeProduct?.id, activeProduct?.modelUrl, activeProduct?.renderedViews]);
 
   const generateMultiViews = async () => {
-    if (!activeProduct?.modelUrl) {
+    const currentId = activeProduct?.id;
+    const currentModelUrl = activeProduct?.modelUrl;
+    if (!currentModelUrl) {
       setRenderError('No 3D model available. Please complete 3D generation first.');
       return;
     }
@@ -98,12 +111,14 @@ export default function ReferenceSheetStage() {
     setRenderError(null);
 
     try {
-      const fullModelUrl = activeProduct.modelUrl.startsWith('http')
-        ? activeProduct.modelUrl
-        : `${API_BASE}${activeProduct.modelUrl}`;
+      const fullModelUrl = currentModelUrl.startsWith('http')
+        ? currentModelUrl
+        : `${API_BASE}${currentModelUrl}`;
 
       const res = await renderDeterministicViews(fullModelUrl);
-      setRenderedViews(res.views);
+      if (activeProductIdRef.current === currentId) {
+        setRenderedViews(res.views);
+      }
       updateActiveProduct({
         renderedViews: res.views,
         renderedDimensions: res.dimensions,
@@ -111,9 +126,13 @@ export default function ReferenceSheetStage() {
       });
     } catch (err) {
       console.error('Multi-view rendering failed:', err);
-      setRenderError(`Multi-view rendering failed: ${err.message}`);
+      if (activeProductIdRef.current === currentId) {
+        setRenderError(`Multi-view rendering failed: ${err.message}`);
+      }
     } finally {
-      setRendering(false);
+      if (activeProductIdRef.current === currentId) {
+        setRendering(false);
+      }
     }
   };
 

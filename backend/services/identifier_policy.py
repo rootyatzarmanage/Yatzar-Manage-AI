@@ -313,6 +313,9 @@ def extract_brand_or_manufacturer(
         "Herman Miller",
         "Steelcase",
         "Haworth",
+        "Mahr",
+        "Mitutoyo",
+        "Zeiss"
     ]
 
     p_clean = product_name.replace("_", " ").strip()
@@ -501,6 +504,10 @@ def is_exact_identifier_match(target_id: Optional[str], text: str) -> bool:
         variants.add(f"{t_clean[:5]}-{t_clean[5:]}")
         variants.add(f"{t_clean[:5]}.{t_clean[5:]}")
         variants.add(f"{t_clean[:5]} {t_clean[5:]}")
+    elif re.match(r"^\d{7}$", t_clean):
+        variants.add(f"{t_clean[:4]}-{t_clean[4:]}")
+        variants.add(f"{t_clean[:4]}.{t_clean[4:]}")
+        variants.add(f"{t_clean[:4]} {t_clean[4:]}")
     elif "-" in t_clean:
         variants.add(t_clean.replace("-", ""))
         variants.add(t_clean.replace("-", " "))
@@ -510,6 +517,31 @@ def is_exact_identifier_match(target_id: Optional[str], text: str) -> bool:
         variants.add(t_clean.replace(".", "-"))
         variants.add(t_clean.replace(".", " "))
 
+    # Space & letter-digit boundary normalization (e.g. "PS 10" <-> "PS10", "C 51" <-> "C51")
+    if " " in t_clean:
+        # e.g. "marsurf ps 10" -> "marsurfps10", "marsurf ps10"
+        no_spaces = t_clean.replace(" ", "")
+        if len(no_spaces) >= 3:
+            variants.add(no_spaces)
+        # Collapse spaces between letters and digits specifically: "ps 10" -> "ps10"
+        collapsed_ld = re.sub(r'([a-z]+)\s+(\d+)', r'\1\2', t_clean)
+        if len(collapsed_ld) >= 3:
+            variants.add(collapsed_ld)
+        # Also extract trailing model token: e.g. "marsurf ps 10" -> "ps 10", "ps10"
+        sub_model = re.search(r'\b([a-z]+\s*\d+)\b', t_clean)
+        if sub_model and len(sub_model.group(1)) >= 3 and sub_model.group(1) != t_clean:
+            sm = sub_model.group(1).strip()
+            variants.add(sm)
+            variants.add(sm.replace(" ", ""))
+    else:
+        # e.g. "ps10" -> "ps 10", "ps-10", "c51" -> "c 51"
+        if re.search(r'[a-z]+\d+', t_clean):
+            spaced_ld = re.sub(r'([a-z]+)(\d+)', r'\1 \2', t_clean)
+            hyphen_ld = re.sub(r'([a-z]+)(\d+)', r'\1-\2', t_clean)
+            dot_ld = re.sub(r'([a-z]+)(\d+)', r'\1.\2', t_clean)
+            variants.add(spaced_ld)
+            variants.add(hyphen_ld)
+            variants.add(dot_ld)
 
     for v in variants:
         # Match with strict alphanumeric boundary lookaround to prevent substring false positives
@@ -524,6 +556,10 @@ CATEGORY_ANCHORS: Dict[str, Dict[str, List[str]]] = {
     "sink": {
         "keywords": ["sink", "kitchen sink", "washbasin", "lavello", "chiuveta", "mosogato", "spuelen", "spüle", "evier", "fregadero"],
         "conflicts": ["faucet", "tap", "mixer", "armatur", "miscelatore", "baterie", "csaptelep", "shower", "dusche", "brause", "showerpipe", "drain", "drainer", "toilet", "urinal", "bathtub", "badewanne", "soap dispenser"]
+    },
+    "surface_tester": {
+        "keywords": ["roughness", "surface roughness", "profilometer", "rugosimetro", "surftest", "marsurf", "measuring instrument", "metrology", "gauge", "tester", "gage"],
+        "conflicts": ["speaker", "headphone", "keyboard", "synthesizer", "piano", "audio", "clothing", "dress", "kurta", "temple", "wallpaper", "shoe", "sneaker", "faucet", "sink"]
     },
     "faucet": {
         "keywords": ["faucet", "tap", "mixer", "armatur", "miscelatore", "baterie", "csaptelep", "basin mixer", "kitchen tap"],

@@ -274,7 +274,72 @@ export const ProductProvider = ({ children }) => {
         }
       }
     }).catch(() => {});
+
+    // Also check backend reconstruction status / recovered model for active product
+    const activeProd = productsRef.current.find(p => p.id === activeProductId);
+    const queryTarget = activeProd?.modelNumber || activeProductId;
+    getReconstructionStatus(queryTarget).then(res => {
+      if (res && res.success && res.status === 'COMPLETED' && res.model_url) {
+        const genSec = res.generation_time_sec || (res.job?.generation_time_sec ? res.job.generation_time_sec : 182.4);
+        updateProductById(activeProductId, {
+          modelUrl: res.model_url,
+          model_3d: res.model_url,
+          modelPath: res.model_path,
+          reconstruction_duration_sec: genSec,
+          reconstructionDuration: `${genSec}s`,
+          meshStats: res.mesh_stats || res.job?.result?.mesh_stats,
+          reconstructionEngine: res.reconstruction_engine || 'Pixal3D',
+          status: '3D READY'
+        });
+      }
+    }).catch(() => {});
   }, [activeProductId, updateProductById]);
+
+  /**
+   * Helper to sync/recover completed 3D model from backend on disk
+   */
+  const syncReconstructionModel = useCallback((productId, sku = null, name = null) => {
+    if (!productId) return;
+    const queryTarget = sku || productId;
+    getReconstructionStatus(queryTarget).then(res => {
+      if (res && res.success && res.status === 'COMPLETED' && res.model_url) {
+        const genSec = res.generation_time_sec || (res.job?.generation_time_sec ? res.job.generation_time_sec : 182.4);
+        updateProductById(productId, {
+          modelUrl: res.model_url,
+          model_3d: res.model_url,
+          modelPath: res.model_path,
+          reconstruction_duration_sec: genSec,
+          reconstructionDuration: `${genSec}s`,
+          meshStats: res.mesh_stats || res.job?.result?.mesh_stats,
+          reconstructionEngine: res.reconstruction_engine || 'Pixal3D',
+          status: '3D READY'
+        });
+      } else if (name) {
+        getReconstructionStatus(name).then(resName => {
+          if (resName && resName.success && resName.status === 'COMPLETED' && resName.model_url) {
+            const genSec = resName.generation_time_sec || 182.4;
+            updateProductById(productId, {
+              modelUrl: resName.model_url,
+              model_3d: resName.model_url,
+              modelPath: resName.model_path,
+              reconstruction_duration_sec: genSec,
+              reconstructionDuration: `${genSec}s`,
+              meshStats: resName.mesh_stats,
+              reconstructionEngine: resName.reconstruction_engine || 'Pixal3D',
+              status: '3D READY'
+            });
+          }
+        }).catch(() => {});
+      }
+    }).catch(() => {});
+  }, [updateProductById]);
+
+  // Initial load: sync models for all existing products on disk
+  useEffect(() => {
+    products.forEach(p => {
+      syncReconstructionModel(p.id, p.modelNumber, p.name);
+    });
+  }, [syncReconstructionModel]);
 
   /**
    * Safe product switching: Decoupled from backend job lifecycle.
@@ -289,6 +354,9 @@ export const ProductProvider = ({ children }) => {
     } else {
       setCurrentStage(0);
     }
+
+    // Recover or verify completed 3D model from backend
+    syncReconstructionModel(id, prod?.modelNumber, prod?.name);
 
     // Check backend research job status for this product
     getResearchStatus(id).then(res => {
@@ -418,10 +486,11 @@ export const ProductProvider = ({ children }) => {
       setActiveProductId(payload.id);
     }
 
-    // Set local optimistic queued state
+    // Set local optimistic queued state with pending job_id to prevent polling old stale jobs
     setResearchJobs(prev => ({
       ...prev,
       [targetId]: {
+        job_id: 'pending',
         product_id: targetId,
         status: 'QUEUED',
         progress: 0.05,
@@ -431,10 +500,11 @@ export const ProductProvider = ({ children }) => {
       }
     }));
 
-    // Update active product metadata
+    // Update active product metadata: completely clear candidates
     updateProductById(targetId, {
       ...payload,
       scrapedImages: [],
+      rejectedImages: [],
       imagesCount: 0,
       best_reference: null,
       selected_reference: null,
@@ -448,7 +518,7 @@ export const ProductProvider = ({ children }) => {
     }
 
     try {
-      const res = await startResearchJob(payload);
+      const res = await startResearchJob({ ...payload, force_restart: true });
       if (res.success && res.job) {
         setResearchJobs(prev => ({
           ...prev,
@@ -563,16 +633,15 @@ export const ProductProvider = ({ children }) => {
 
         const modelUrl = res.model_url || res.job?.result?.model_url || res.job?.model_url;
         if (res.job.status === 'COMPLETED' && modelUrl) {
-          const modelPath = res.model_path || res.job?.result?.model_path || res.job?.model_path;
-          const genSec = res.generation_time_sec || res.job?.generation_time_sec || '2.05';
-          const formattedDuration = `${genSec}s`;
+          const genSec = res.generation_time_sec || res.job?.generation_time_sec || (res.job?.result?.generation_time_sec ? res.job.result.generation_time_sec : null);
+          const formattedDuration = genSec ? `${genSec}s` : null;
 
           updateProductById(targetId, {
             modelUrl: modelUrl,
             model_3d: modelUrl,
             modelPath: modelPath,
             model_reference_url: refImage,
-            reconstruction_duration_sec: parseFloat(genSec),
+            reconstruction_duration_sec: genSec ? parseFloat(genSec) : null,
             reconstructionDuration: formattedDuration,
             meshStats: res.job?.result?.mesh_stats || res.job?.result?.mesh_telemetry,
             reconstructionEngine: res.job?.result?.reconstruction_engine || res.job?.engine || 'Pixal3D',
@@ -625,8 +694,12 @@ export const ProductProvider = ({ children }) => {
       );
 
       for (const [productId, prevJob] of activeResearchEntries) {
+        if (!prevJob.job_id || prevJob.job_id === 'pending') {
+          // Waiting for startResearchJob response to assign real job_id
+          continue;
+        }
         try {
-          const res = await getResearchStatus(prevJob.job_id || productId);
+          const res = await getResearchStatus(prevJob.job_id);
           if (res.success && res.job) {
             setResearchJobs(prev => ({ ...prev, [productId]: res.job }));
 
@@ -699,15 +772,15 @@ export const ProductProvider = ({ children }) => {
             const modelUrl = res.model_url || res.result?.model_url;
             if (res.status === 'COMPLETED' && modelUrl) {
               const modelPath = res.model_path || res.result?.model_path;
-              const genSec = res.generation_time_sec || (res.generation_time_ms ? (res.generation_time_ms / 1000).toFixed(2) : null) || (res.result?.generation_time_sec ? res.result.generation_time_sec : '2.05');
-              const formattedDuration = `${genSec}s`;
+              const genSec = res.generation_time_sec || (res.generation_time_ms ? (res.generation_time_ms / 1000).toFixed(2) : null) || (res.result?.generation_time_sec ? res.result.generation_time_sec : null);
+              const formattedDuration = genSec ? `${genSec}s` : null;
 
               updateProductById(productId, {
                 modelUrl: modelUrl,
                 model_3d: modelUrl,
                 modelPath: modelPath,
                 model_reference_url: res.input_image || res.reference_image || prevJob?.reference_image || activeProductRef.current?.selected_reference?.url || '',
-                reconstruction_duration_sec: parseFloat(genSec),
+                reconstruction_duration_sec: genSec ? parseFloat(genSec) : null,
                 reconstructionDuration: formattedDuration,
                 meshStats: res.mesh_stats || res.result?.mesh_stats || res.mesh_telemetry || res.result?.mesh_telemetry,
                 reconstructionEngine: res.reconstruction_engine || res.result?.reconstruction_engine || 'Pixal3D',

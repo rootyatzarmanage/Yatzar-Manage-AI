@@ -28,21 +28,38 @@ export default function Approval3DStage() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
+  const activeIdRef = useRef(activeProduct?.id);
+  const activeModelUrlRef = useRef(activeProduct?.modelUrl);
+
   useEffect(() => {
-    if (activeProduct?.modelUrl && !validationResult && !validating) {
+    activeIdRef.current = activeProduct?.id;
+    activeModelUrlRef.current = activeProduct?.modelUrl;
+    setValidationResult(activeProduct?.validationResult || null);
+  }, [activeProduct?.id, activeProduct?.modelUrl, activeProduct?.validationResult]);
+
+  useEffect(() => {
+    if (activeProduct?.modelUrl && !activeProduct?.validationResult && !validating) {
       runValidation();
     }
-  }, [activeProduct?.modelUrl]);
+  }, [activeProduct?.id, activeProduct?.modelUrl, activeProduct?.validationResult]);
 
   const runValidation = async () => {
+    const currentId = activeProduct?.id;
+    const currentModelUrl = activeProduct?.modelUrl;
+    const currentModelPath = activeProduct?.modelPath;
+
+    if (!currentModelUrl) return;
+
     setValidating(true);
     try {
       const payload = {
-        model_url: activeProduct.modelUrl,
-        model_path: activeProduct.modelPath
+        model_url: currentModelUrl,
+        model_path: currentModelPath
       };
       const res = await validate3D(payload);
-      setValidationResult(res);
+      if (activeIdRef.current === currentId) {
+        setValidationResult(res);
+      }
       updateActiveProduct({
         validationResult: res,
         status: res.valid ? 'APPROVED' : 'FAILED'
@@ -53,10 +70,14 @@ export default function Approval3DStage() {
         valid: false,
         error: err.message || 'Mesh asset validation failed.'
       };
-      setValidationResult(fallbackFail);
+      if (activeIdRef.current === currentId) {
+        setValidationResult(fallbackFail);
+      }
       updateActiveProduct({ validationResult: fallbackFail, status: 'FAILED' });
     } finally {
-      setValidating(false);
+      if (activeIdRef.current === currentId) {
+        setValidating(false);
+      }
     }
   };
 

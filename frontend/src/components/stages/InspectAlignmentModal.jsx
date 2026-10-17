@@ -107,11 +107,18 @@ export default function InspectAlignmentModal({ seedImage, candidateImage, isOpe
               </div>
 
               <div className="relative aspect-square rounded-2xl overflow-hidden bg-slate-900 border border-[#CBD5E1] dark:border-[#1E2C52]">
-                <img
-                  src={seedImage || 'https://images.unsplash.com/photo-1581092160607-ee22621dd758?w=500&auto=format&fit=crop&q=80'}
-                  alt="Seed Image"
-                  className="w-full h-full object-cover opacity-80"
-                />
+                {seedImage ? (
+                  <img
+                    src={seedImage}
+                    alt="Seed Image"
+                    className="w-full h-full object-cover opacity-80"
+                  />
+                ) : (
+                  <div className="w-full h-full flex flex-col items-center justify-center text-slate-500">
+                    <Crosshair className="w-8 h-8 opacity-40 mb-2" />
+                    <span className="text-xs">No Seed Image</span>
+                  </div>
+                )}
 
                 <div className="absolute inset-0 grid grid-cols-16 grid-rows-16 pointer-events-auto">
                   {patches.map((patch) => {

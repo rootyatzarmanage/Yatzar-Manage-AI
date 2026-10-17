@@ -4,7 +4,7 @@ Comprehensive Regression and Behavioral Test Suite for:
 2. Manual Reference Image Selection (A/B/C routing to backend Pixal3D)
 3. Fresh Neural Inference Execution (zero persistent reconstruction caching)
 4. High-Resolution Timing Telemetry (T0 -> T14 and Cold vs. Warm tracking)
-5. Isolated TripoSR Debug Flag Execution (isolated debug path)
+5. Unsupported Engine Rejection (sole engine TencentARC/Pixal3D)
 6. Downstream State Invalidation on Selection Change
 7. Multi-View Deterministic Rendering & Reference Sheet Integrity
 8. Metadata Fidelity (zero invented fields, 'Not provided' fallback)
@@ -190,24 +190,24 @@ class TestReconstructionAndReferenceSelection(unittest.TestCase):
         print(f"[OK] Test 5 passed: Valid Pixal3D mesh verified ({mesh_stats.get('vertex_count')} verts, {mesh_stats.get('face_count')} tris).")
 
     # ------------------------------------------------------------------------
-    # TEST 6: TripoSR Eradication & Pixal3D Sole Engine Enforcement
+    # TEST 6: Unsupported Engine Strict Rejection & Pixal3D Enforcement
     # ------------------------------------------------------------------------
-    def test_06_triposr_eradication_and_pixal3d_sole_engine(self):
-        """Verifies that TripoSR is eradicated and any legacy request routes strictly to Pixal3D."""
+    def test_06_unsupported_engine_rejection(self):
+        """Verifies that unsupported engine requests are strictly rejected with 400."""
         payload = {
             "reference_image": str(self.img_c_path),
-            "product_title": "Pixal3D Product",
+            "product_title": "Unsupported Engine Test",
             "product_sku": "DEBUG-01",
             "product_id": "PROD-DEBUG-01",
-            "engine": "TripoSR"
+            "engine": "LegacyUnsupportedEngine"
         }
-        resp = self.client.post("/api/v1/reconstruct?sync=true", json=payload)
+        resp = self.client.post("/api/v1/reconstruct", json=payload)
         data = resp.get_json()
-        self.assertEqual(resp.status_code, 200)
-        self.assertTrue(data.get("success"))
-        # TripoSR is completely eradicated; engine is strictly Pixal3D
-        self.assertEqual(data.get("reconstruction_engine"), "Pixal3D")
-        print("[OK] Test 6 passed: TripoSR eradicated and Pixal3D enforced as sole production engine.")
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(data.get("success"))
+        self.assertEqual(data.get("status"), "FAILED")
+        self.assertIn("Unsupported reconstruction engine", data.get("error", ""))
+        print("[OK] Test 6 passed: Unsupported engine strictly rejected with 400 and clear error.")
 
 
 if __name__ == "__main__":

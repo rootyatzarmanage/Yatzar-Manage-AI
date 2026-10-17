@@ -61,3 +61,6 @@ build/
 Thumbs.db
 *.lnk
 
+# Filesharing folder (never push)
+filesharing/
+

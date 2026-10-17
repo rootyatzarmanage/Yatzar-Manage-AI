@@ -127,7 +127,7 @@ export default function Generate3DStage() {
               </h1>
             </div>
             <p className="text-xs text-[#64748B] dark:text-[#8D9CB8]">
-              Serialized single-slot GPU queue on RTX 4060. Exact approved image conditioning with PBR material synthesis.
+              Serialized single-slot GPU queue on RTX 4060. 1536 HR Shape Cascade + 1024 Texture Model + 2048px PBR Texture Baking.
             </p>
           </div>
 
@@ -175,7 +175,7 @@ export default function Generate3DStage() {
                       {activeReconstructionJob?.current_phase || 'Synthesizing 3D Asset on CUDA...'}
                     </h3>
                     <p className="text-xs text-[#64748B] dark:text-[#8D9CB8] mt-1">
-                      Official TencentARC Pixal3D 1536 Cascade • High-Precision PBR
+                      Official TencentARC Pixal3D • 1536 HR Shape Cascade + 1024 Texture Model + 2048px PBR
                     </p>
                   </div>
                   {activeReconstructionJob?.progress !== undefined && (
@@ -230,15 +230,24 @@ export default function Generate3DStage() {
                       </span>
                     </div>
                     <p className="text-xs text-[#475569] dark:text-[#94A3B8] mt-0.5">
-                      Synthesized with TencentARC Pixal3D in{' '}
-                      <span className="font-semibold text-emerald-700 dark:text-emerald-300">
-                        {activeProduct?.reconstructionDuration || '402.3s'}
-                      </span>{' '}
-                      •{' '}
-                      <span className="font-semibold text-emerald-700 dark:text-emerald-300">
-                        {(activeProduct?.meshStats?.vertex_count || activeProduct?.meshStats?.vertices || 217752).toLocaleString()} Vertices
-                      </span>{' '}
-                      • 2048px PBR UV Textures
+                      Synthesized with TencentARC Pixal3D
+                      {activeProduct?.reconstructionDuration ? (
+                        <>
+                          {' in '}
+                          <span className="font-semibold text-emerald-700 dark:text-emerald-300">
+                            {activeProduct.reconstructionDuration}
+                          </span>
+                        </>
+                      ) : null}
+                      {(activeProduct?.meshStats?.vertex_count || activeProduct?.meshStats?.vertices) ? (
+                        <>
+                          {' • '}
+                          <span className="font-semibold text-emerald-700 dark:text-emerald-300">
+                            {(activeProduct.meshStats.vertex_count || activeProduct.meshStats.vertices).toLocaleString()} Vertices
+                          </span>
+                        </>
+                      ) : null}
+                      {' • 2048px PBR UV Textures'}
                     </p>
                   </div>
                 </div>
@@ -422,26 +431,26 @@ export default function Generate3DStage() {
                   </div>
                   <div className="flex justify-between p-2 rounded-lg bg-[#F8FAFC] dark:bg-[#0F1832] border border-[#E2E8F0] dark:border-[#1E2C52]">
                     <span className="text-[#64748B] dark:text-[#8D9CB8]">Engine</span>
-                    <span className="font-semibold text-[#1C2434] dark:text-white">TencentARC/Pixal3D (1536)</span>
+                    <span className="font-semibold text-[#1C2434] dark:text-white">TencentARC/Pixal3D (1536 HR Shape + 1024 Tex)</span>
                   </div>
                   <div className="flex justify-between p-2 rounded-lg bg-[#F8FAFC] dark:bg-[#0F1832] border border-[#E2E8F0] dark:border-[#1E2C52]">
                     <span className="text-[#64748B] dark:text-[#8D9CB8]">Output Format</span>
                     <span className="font-mono text-[11px] text-brand-600 dark:text-brand-400">2048px PBR WebP .GLB</span>
                   </div>
-                  {activeProduct?.reconstructionDuration && (
-                    <div className="flex justify-between p-2 rounded-lg bg-[#F8FAFC] dark:bg-[#0F1832] border border-[#E2E8F0] dark:border-[#1E2C52]">
-                      <span className="text-[#64748B] dark:text-[#8D9CB8]">Duration</span>
-                      <span className="font-mono text-[11px] text-[#1C2434] dark:text-white">{activeProduct.reconstructionDuration}</span>
-                    </div>
-                  )}
-                  {activeProduct?.meshStats && (
-                    <div className="flex justify-between p-2 rounded-lg bg-[#F8FAFC] dark:bg-[#0F1832] border border-[#E2E8F0] dark:border-[#1E2C52]">
-                      <span className="text-[#64748B] dark:text-[#8D9CB8]">Geometry</span>
-                      <span className="font-semibold text-[#1C2434] dark:text-white">
-                        {(activeProduct.meshStats.vertex_count || activeProduct.meshStats.vertices || 0).toLocaleString()} Verts
-                      </span>
-                    </div>
-                  )}
+                  <div className="flex justify-between p-2 rounded-lg bg-[#F8FAFC] dark:bg-[#0F1832] border border-[#E2E8F0] dark:border-[#1E2C52]">
+                    <span className="text-[#64748B] dark:text-[#8D9CB8]">Duration</span>
+                    <span className="font-mono text-[11px] text-[#1C2434] dark:text-white">
+                      {activeProduct?.reconstructionDuration || '—'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between p-2 rounded-lg bg-[#F8FAFC] dark:bg-[#0F1832] border border-[#E2E8F0] dark:border-[#1E2C52]">
+                    <span className="text-[#64748B] dark:text-[#8D9CB8]">Geometry</span>
+                    <span className="font-semibold text-[#1C2434] dark:text-white">
+                      {(activeProduct?.meshStats?.vertex_count || activeProduct?.meshStats?.vertices)
+                        ? `${(activeProduct.meshStats.vertex_count || activeProduct.meshStats.vertices).toLocaleString()} Verts`
+                        : '—'}
+                    </span>
+                  </div>
                 </div>
 
                 {activeModelUrl && (

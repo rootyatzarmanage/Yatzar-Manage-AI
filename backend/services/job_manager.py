@@ -270,6 +270,14 @@ class ResearchJobManager:
             self._jobs[job_id] = job
             self._product_to_latest_job[product_id] = job_id
 
+            # Invalidate stale persisted cache file for this product
+            try:
+                cache_file = self._get_cache_path(product_id)
+                if cache_file.exists():
+                    cache_file.unlink()
+            except Exception as e:
+                logger.debug(f"[JOB MANAGER] Cache unlink notice: {e}")
+
             logger.info(f"[JOB MANAGER] Created new ResearchJob {job_id} for product {product_id} (Status: QUEUED)")
 
             future = self._executor.submit(self._run_research_worker, job)
@@ -498,6 +506,14 @@ class ReconstructionQueueManager:
         Enqueues a 3D reconstruction request.
         Preserves the EXACT approved reference image across queuing.
         """
+        if not reference_image or not str(reference_image).strip():
+            logger.error(f"[RECONSTRUCT QUEUE] Rejected: Missing approved reference image for '{product_name}' ({product_id})")
+            raise ValueError("Missing approved reference image for 3D reconstruction")
+
+        if engine.strip().lower() not in ("pixal3d", "tencentarc/pixal3d"):
+            logger.error(f"[RECONSTRUCT QUEUE] Rejected: Unsupported reconstruction engine '{engine}'")
+            raise ValueError(f"Unsupported reconstruction engine: '{engine}'. Sole production engine is TencentARC/Pixal3D.")
+
         with self._queue_lock:
             # Check if an existing active reconstruction is queued/running for this product
             existing_job_id = self._product_to_job.get(product_id)
@@ -659,6 +675,13 @@ class ReconstructionQueueManager:
                     job.current_phase = "Validating 3D Mesh Topology"
                     job.progress = 0.99
                     val_result = service.validate_mesh_asset(result["local_path"])
+                    actual_gen_sec = result.get("generation_time_sec")
+                    if actual_gen_sec is None and job.started_at:
+                        actual_gen_sec = round(time.time() - job.started_at, 2)
+                    actual_gen_ms = result.get("generation_time_ms")
+                    if actual_gen_ms is None and actual_gen_sec is not None:
+                        actual_gen_ms = int(actual_gen_sec * 1000)
+
                     job.result = {
                         "success": True,
                         "asset_id": result.get("asset_id", job.job_id),
@@ -669,8 +692,8 @@ class ReconstructionQueueManager:
                         "model_filename": result.get("model_filename", os.path.basename(result.get("local_path", "model.glb"))),
                         "format": result.get("format", "glb"),
                         "reconstruction_engine": result.get("reconstruction_engine", job.engine),
-                        "generation_time_sec": result.get("generation_time_sec", 2.05),
-                        "generation_time_ms": result.get("generation_time_ms", 2050),
+                        "generation_time_sec": actual_gen_sec,
+                        "generation_time_ms": actual_gen_ms,
                         "call_count": result.get("call_count", 1),
                         "request_token": result.get("request_token", job.job_id),
                         "telemetry": result.get("telemetry", {}),
@@ -706,3 +729,11 @@ class ReconstructionQueueManager:
             finally:
                 with self._queue_lock:
                     self._active_job = None
+                try:
+                    import gc
+                    import torch
+                    gc.collect()
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                except Exception:
+                    pass

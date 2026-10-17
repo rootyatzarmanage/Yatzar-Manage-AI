@@ -215,14 +215,20 @@ class QueryPlanner:
             )
 
         if p_name and model and not brand:
+            p_clean = p_name.strip()
+            m_clean = model.strip()
+            if m_clean.lower() in p_clean.lower():
+                combined_name_model = p_clean
+            else:
+                combined_name_model = f"{p_clean} {m_clean}"
             add_q(
-                f'"{p_name} {model}"',
+                f'"{combined_name_model}"',
                 QueryFamily.EXACT_PRODUCT,
                 0.95,
                 1,
                 TargetEvidence.EXACT_MATCH,
                 ["product_name", "model_number"],
-                f"Product name and manufacturer model combination {p_name} {model}",
+                f"Product name and manufacturer model combination {combined_name_model}",
                 "Isometric Angle"
             )
 

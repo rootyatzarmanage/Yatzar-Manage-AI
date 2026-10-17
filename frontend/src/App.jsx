@@ -11,24 +11,25 @@ import Approval3DStage from './components/stages/Approval3DStage';
 import ReferenceSheetStage from './components/stages/ReferenceSheetStage';
 
 function MainContent() {
-  const { currentStage } = useProducts();
+  const { currentStage, activeProduct } = useProducts();
 
   const renderStage = () => {
+    const stageKey = `${activeProduct?.id || 'prod'}-stage-${currentStage}`;
     switch (currentStage) {
       case 0:
-        return <InputStage />;
+        return <InputStage key={stageKey} />;
       case 1:
-        return <ScrapeStage />;
+        return <ScrapeStage key={stageKey} />;
       case 2:
-        return <ImageApprovalStage />;
+        return <ImageApprovalStage key={stageKey} />;
       case 3:
-        return <Generate3DStage />;
+        return <Generate3DStage key={stageKey} />;
       case 4:
-        return <Approval3DStage />;
+        return <Approval3DStage key={stageKey} />;
       case 5:
-        return <ReferenceSheetStage />;
+        return <ReferenceSheetStage key={stageKey} />;
       default:
-        return <InputStage />;
+        return <InputStage key={stageKey} />;
     }
   };
 

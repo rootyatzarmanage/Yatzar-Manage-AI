@@ -496,7 +496,11 @@ class SparseUnetVaeDecoder(nn.Module):
                         h, sub = block(h)
                         subs.append(sub)
                     else:
-                        h = block(h, subdiv=guide_subs[i] if guide_subs is not None else None)
+                        guide_sub = guide_subs[i] if guide_subs is not None else None
+                        h = block(h, subdiv=guide_sub)
+                        if guide_subs is not None and i < len(guide_subs):
+                            guide_subs[i] = None
+                        del guide_sub
                 else:
                     h = block(h)
                 if torch.cuda.is_available():

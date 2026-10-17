@@ -2,7 +2,7 @@ import React, { useRef, useState, useEffect } from 'react';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { Box, RotateCw, Eye, Sparkles, Flashlight } from 'lucide-react';
+import { Box, RotateCw, Eye, Sparkles, Flashlight, Sun, Moon } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:5000';
 
@@ -20,11 +20,13 @@ export default function ThreeCADViewer({
   const currentModelRef = useRef(null);
   const throwLightRef = useRef(null);
   const throwFillRef = useRef(null);
+  const gridHelperRef = useRef(null);
 
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState(null);
   const [autoRotate, setAutoRotate] = useState(true);
   const [wireframe, setWireframe] = useState(false);
+  const [whiteBg, setWhiteBg] = useState(false);
   const [throwLight, setThrowLight] = useState(false);
   const [throwIntensity, setThrowIntensity] = useState(1.8);
 
@@ -96,6 +98,7 @@ export default function ThreeCADViewer({
     const gridHelper = new THREE.GridHelper(8, 16, 0x3b82f6, 0x1e293b);
     gridHelper.position.y = -0.01;
     scene.add(gridHelper);
+    gridHelperRef.current = gridHelper;
 
     // Animation loop
     let animationId;
@@ -134,6 +137,30 @@ export default function ThreeCADViewer({
       controlsRef.current.autoRotate = autoRotate;
     }
   }, [autoRotate]);
+
+  // Update White / Dark Studio Viewport Canvas
+  useEffect(() => {
+    if (!sceneRef.current) return;
+    if (whiteBg) {
+      sceneRef.current.background = new THREE.Color('#FFFFFF');
+      if (gridHelperRef.current) {
+        sceneRef.current.remove(gridHelperRef.current);
+        const lightGrid = new THREE.GridHelper(8, 16, 0x94a3b8, 0xe2e8f0);
+        lightGrid.position.y = -0.01;
+        sceneRef.current.add(lightGrid);
+        gridHelperRef.current = lightGrid;
+      }
+    } else {
+      sceneRef.current.background = new THREE.Color('#0B1120');
+      if (gridHelperRef.current) {
+        sceneRef.current.remove(gridHelperRef.current);
+        const darkGrid = new THREE.GridHelper(8, 16, 0x3b82f6, 0x1e293b);
+        darkGrid.position.y = -0.01;
+        sceneRef.current.add(darkGrid);
+        gridHelperRef.current = darkGrid;
+      }
+    }
+  }, [whiteBg]);
 
   // Update Throw Light visibility and intensity dynamically
   useEffect(() => {
@@ -294,6 +321,29 @@ export default function ThreeCADViewer({
 
       {/* Interactive Controls Overlay (Top Right) */}
       <div className="absolute top-3 right-3 flex items-center gap-2">
+        {/* White / Dark Canvas Switch */}
+        <button
+          onClick={() => setWhiteBg(!whiteBg)}
+          className={`px-2.5 py-1 rounded-xl text-xs font-semibold border backdrop-blur-md transition-all flex items-center gap-1.5 cursor-pointer ${
+            whiteBg
+              ? 'bg-white text-slate-900 border-slate-300 shadow-sm ring-1 ring-slate-300'
+              : 'bg-slate-900/80 text-slate-300 border-slate-700/60 hover:text-white'
+          }`}
+          title={whiteBg ? "Switch to Dark Studio Canvas" : "Switch to White Studio Canvas for high-contrast inspection"}
+        >
+          {whiteBg ? (
+            <>
+              <Moon className="w-3.5 h-3.5 text-indigo-600" />
+              <span>Dark Canvas</span>
+            </>
+          ) : (
+            <>
+              <Sun className="w-3.5 h-3.5 text-amber-400" />
+              <span>White Canvas</span>
+            </>
+          )}
+        </button>
+
         {/* Throw Light Inspection Rig */}
         <button
           onClick={() => setThrowLight(!throwLight)}

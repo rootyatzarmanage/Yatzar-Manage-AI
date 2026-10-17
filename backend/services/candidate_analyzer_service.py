@@ -368,7 +368,14 @@ class CandidateAnalyzerService:
             rejection_reason = None
             explanation = f"{type_reason}. Classified as {cand_type.value} ({viewpoint.value} via {vp_source}){variant_note}. {value_reason}."
         else:
-            rejection_reason = match_reason if prod_match == ProductMatch.DIFFERENT_PRODUCT else (type_reason or "Insufficient candidate metadata to corroborate product identity")
+            if prod_match == ProductMatch.DIFFERENT_PRODUCT:
+                rejection_reason = match_reason
+            elif prod_match == ProductMatch.UNCERTAIN:
+                rejection_reason = "Insufficient candidate metadata to corroborate product identity"
+            elif not is_evidence:
+                rejection_reason = f"Non-reconstructible asset type ({cand_type.value})"
+            else:
+                rejection_reason = match_reason or "Uncorroborated product reference"
             explanation = f"Rejected candidate: {rejection_reason}."
 
         return CandidateEvaluation(
@@ -515,14 +522,19 @@ class CandidateAnalyzerService:
         # 4. Check for Category Conflicts (Primary Category Anchor Gate)
         target_cat_key = extract_primary_category(product_name=product_name, category=category)
         is_cat_conflict, t_cat, conf_term = detect_category_conflict(target_cat_key, text)
-        if is_cat_conflict and not has_exact_article:
-            return (
-                ProductMatch.DIFFERENT_PRODUCT,
-                0.95,
-                f"Category conflict: Target is '{t_cat}', candidate mentions conflicting category '{conf_term}' (CATEGORY_CONFLICT)",
-                ["category_conflict"],
-                ["category_conflict"]
-            )
+        if is_cat_conflict:
+            # Model-number collision prevention:
+            # A candidate in a conflicting category must NOT bypass conflict detection
+            # simply because it matched a model number (e.g. "C51" faucet vs sink, "PS10" speaker vs tester).
+            # Only allow if corroborated by verified official domain origin AND brand.
+            if not (is_official_domain and has_brand):
+                return (
+                    ProductMatch.DIFFERENT_PRODUCT,
+                    0.95,
+                    f"Category conflict: Target is '{t_cat}', candidate mentions conflicting category '{conf_term}' (CATEGORY_CONFLICT)",
+                    ["category_conflict"],
+                    ["category_conflict"]
+                )
 
         # 5. Check for core product name tokens in candidate-owned metadata (non-generic tokens only)
         has_product_name = False
@@ -600,9 +612,23 @@ class CandidateAnalyzerService:
         if has_exact_article and has_brand:
             return ProductMatch.EXACT_ID_MATCH, 0.96, f"Exact article/model number '{matched_id_str}' and brand '{brand}' matched in metadata", evidence_sources, match_reasons
 
-        # TIER 3: EXACT ID MATCH (Exact article/model confirmed)
+        # TIER 3: EXACT ID MATCH / MODEL RETRIEVAL SIGNAL
         if has_exact_article:
-            return ProductMatch.EXACT_ID_MATCH, 0.92, f"Exact article/model number '{matched_id_str}' confirmed in candidate text", evidence_sources, match_reasons
+            # Distinguish unique manufacturer catalog identifier (long SKU, 7+ alnum chars, or model+brand)
+            # from short generic model tokens (e.g. "C51", "PS10", "A3102") that can collide across categories.
+            alnum_len = len(re.sub(r'[^a-zA-Z0-9]+', '', matched_id_str or ""))
+            is_specific_catalog_id = (
+                alnum_len >= 7
+                or (alnum_len >= 6 and any(c.isdigit() for c in matched_id_str) and any(c.isalpha() for c in matched_id_str))
+                or has_brand
+                or is_official_domain
+            )
+            if is_specific_catalog_id:
+                return ProductMatch.EXACT_ID_MATCH, 0.92, f"Exact article/model number '{matched_id_str}' confirmed in candidate text", evidence_sources, match_reasons
+            elif has_product_name:
+                return ProductMatch.TARGET_PRODUCT, 0.85, f"Model token '{matched_id_str}' corroborated with product name tokens", evidence_sources, match_reasons
+            else:
+                return ProductMatch.UNCERTAIN, 0.55, f"Model token '{matched_id_str}' found but lacks brand/title corroboration (POTENTIAL_COLLISION)", evidence_sources, match_reasons
 
         # TIER 4: STRONG PRODUCT IDENTITY (Official domain + product name match)
         if is_official_domain and has_product_name:
@@ -779,10 +805,10 @@ class CandidateAnalyzerService:
             return True, EvidenceValue.MEDIUM, f"Supporting {viewpoint.value} viewpoint providing additional visual fidelity"
 
         # If viewpoint is UNKNOWN (no viewpoint metadata found in candidate)
+        # Pass verified target product candidates into the eligible reference pool as MEDIUM evidence value so that
+        # ReferencePoolCurationService can select diverse, non-redundant candidates via DINOv2 embeddings.
         if viewpoint == Viewpoint.UNKNOWN:
-            if len(existing_viewpoints) < 2:
-                return True, EvidenceValue.MEDIUM, "Verified target product image with general perspective"
-            return False, EvidenceValue.LOW, "Supporting view without distinct verified orthogonal angle"
+            return True, EvidenceValue.MEDIUM, "Verified target product image with general perspective"
 
         return True, EvidenceValue.MEDIUM, "Verified candidate product reference"
 

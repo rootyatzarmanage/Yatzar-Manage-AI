@@ -58,9 +58,6 @@ DEFAULT_USER_AGENT = (
 MIN_IMAGE_DIMENSION = 80
 INTRA_POOL_DEDUP_THRESHOLD = 0.95
 
-# Generic neutral seed fallback placeholder (neutral gray cube / product silhouette, NOT a shoe)
-NEUTRAL_SEED_FALLBACK = "https://images.unsplash.com/photo-1581291518857-4e27b48ff24e?w=600&auto=format&fit=crop&q=80"
-
 
 # ============================================================================
 # STEP 8: URL-LEVEL NORMALIZATION AND DEDUPLICATION
@@ -932,7 +929,28 @@ class ScrapingPipelineManager:
                     # Identity corroborated from official domain
                     continue
 
-                # If candidate lacks exact ID evidence and is visually discordant (<0.45 cosine)
+                # Technical drawings & dimensional schematics:
+                # Schematics do not visually resemble studio photos but provide critical geometric/dimensional value.
+                is_tech_drawing = (
+                    sem_eval.candidate_type == CandidateType.TECHNICAL_DRAWING
+                    or sem_eval.verified_viewpoint == Viewpoint.TECHNICAL
+                )
+                if is_tech_drawing:
+                    if sem_eval.product_match == ProductMatch.TARGET_PRODUCT or any(s in sem_eval.evidence_sources for s in ["product_title_tokens", "brand_metadata"]):
+                        if v_sim >= 0.20:
+                            continue
+
+                # Corroborated TARGET_PRODUCT (brand + product name confirmed, no category/brand conflict):
+                # Valid alternate angles (side profile, rear, angled) or real-world lighting naturally have lower cosine similarity
+                # against a single frontal seed photo. Allow corroborated alternate angles down to 0.28.
+                if sem_eval.product_match == ProductMatch.TARGET_PRODUCT and sem_eval.category_compatible:
+                    if v_sim >= 0.28:
+                        # Retain as valid supporting evidence rather than discarding
+                        sem_eval.reconstruction_evidence = True
+                        sem_eval.rejection_reason = None
+                        continue
+
+                # Candidates lacking strong identity evidence or with visual similarity below evidence thresholds:
                 if v_sim < 0.45:
                     sem_eval.product_match = ProductMatch.DIFFERENT_PRODUCT
                     sem_eval.reconstruction_evidence = False
@@ -1105,6 +1123,7 @@ class ScrapingPipelineManager:
                 "coordinates": cand_coords[i] if i < len(cand_coords) else {"x": 0.0, "y": 0.0},
                 "angle": f"{sem_eval.verified_viewpoint.value.title()} View",
                 "prefilter_status": "accepted",
+                "visual_sim_to_seed": c.get("visual_sim_to_seed"),
                 # Semantic Evaluation Details
                 "product_match": sem_eval.product_match.value,
                 "product_match_confidence": sem_eval.product_match_confidence,
